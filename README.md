@@ -1,2 +1,118 @@
 # ElephantFormer
 A Transformer-based move prediction model for Elephant Chess.
+
+
+# Plan
+Here's my plan **without an `<end>` token**, focusing on GPT-style modeling of Chinese chess moves as `(from_x, from_y, to_x, to_y)` token sequences:
+
+---
+
+## Step 1: Define Vocabulary & Tokenization
+
+*   **Move Representation**: Each move is a tuple of 4 components: `(from_x, from_y, to_x, to_y)`.
+*   **Component Vocabularies**:
+    *   `from_x`: 9 tokens (0–8)
+    *   `from_y`: 10 tokens (0–9)
+    *   `to_x`: 9 tokens (0–8)
+    *   `to_y`: 10 tokens (0–9)
+*   **Input Tokenization**:
+    *   We need a unified vocabulary for the input to the Transformer's embedding layer. This could be achieved by:
+        1.  **Concatenated Sequence of Individual Component Tokens**: Each move `(fx, fy, tx, ty)` is represented as 4 consecutive tokens in the input sequence. The total vocabulary for the embedding layer will include all component tokens plus special tokens.
+        2.  **Combined Move Tokens (Alternative, more complex)**: Create a unique ID for each possible 4-tuple move. This would lead to a very large vocabulary. (Sticking to 1 for now as per current plan)
+      *   Strategy 1. **Concatenated Sequence of Individual Component Tokens** is chosen for its small vocabulary.
+*   Special token: `<start>` for generation start.
+*   Input sequence example (using concatenated component tokens): `<start> fx₁ fy₁ tx₁ ty₁ fx₂ fy₂ tx₂ ty₂ ...`
+
+---
+
+## Step 2: Dataset Preparation
+
+*   Collect full games. Each move is represented as a 4-tuple: `(fx, fy, tx, ty)`.
+*   **Input sequences**: A sequence of previous moves, where each move is 4 tokens.
+    *   Example: `[<start>, fx₁, fy₁, tx₁, ty₁, fx₂, fy₂, tx₂, ty₂]`
+*   **Target sequences**: For each input sequence, the target is the next move, also as a 4-tuple of token IDs `(next_fx, next_fy, next_tx, next_ty)`.
+    *   The model will predict these 4 components *simultaneously* for a given timestep.
+*   Pad sequences if batching.
+
+---
+
+## Step 3: Model Architecture
+
+*   Use a GPT-style transformer model with:
+    *   **Token Embedding Layer**: Input tokens (from the unified vocabulary if using concatenated component tokens) are embedded.
+    *   Positional Embeddings.
+    *   Several Transformer Blocks.
+    *   **Output Layer**: Four separate classification heads, one for each component of the move:
+        *   Head_from_x: Projects to 9 logits (for `from_x` tokens).
+        *   Head_from_y: Projects to 10 logits (for `from_y` tokens).
+        *   Head_to_x: Projects to 9 logits (for `to_x` tokens).
+        *   Head_to_y: Projects to 10 logits (for `to_y` tokens).
+        *   Each head will have a softmax activation.
+*   Model input shape: `(batch_size, seq_len)` where `seq_len` is the number of individual tokens (e.g., if 10 moves, `seq_len = 1 + 10*4 = 41` which means using `<start>` and concatenated tokens).
+*   Model output shape (at each relevant prediction step): A tuple of 4 logit tensors:
+    *   `(batch_size, num_from_x_classes)`
+    *   `(batch_size, num_from_y_classes)`
+    *   `(batch_size, num_to_x_classes)`
+    *   `(batch_size, num_to_y_classes)`
+    *   (Alternatively, if predicting at every sequence position: `(batch_size, seq_len, num_classes)` for each head, but the primary interest is the prediction at the end of the input sequence to generate the next move.)
+
+---
+
+## Step 4: Training Procedure
+
+*   Train autoregressively to predict the 4 components of the *next full move* given the sequence of previous moves (as individual tokens).
+*   **Loss Function**: Use four separate CrossEntropyLoss functions, one for each output head.
+    *   `loss = loss_fx + loss_fy + loss_tx + loss_ty` (or an average).
+*   Use teacher forcing: feed the true previous move (as 4 tokens) to predict the current move's 4 components.
+*   Batch training with padding and attention masks. The attention mask ensures the model only attends to previous tokens.
+
+---
+
+## Step 5: Move Generation (Inference)
+
+*   Start with an input sequence (e.g., `[<start>]` or `[<start>, fx₁, fy₁, tx₁, ty₁, ..., fxₖ, fyₖ, txₖ, tyₖ]`).
+*   At each generation step:
+    1.  **Get Model Output**: Feed the current sequence into the model. It outputs four sets of logits: `L_fx`, `L_fy`, `L_tx`, `L_ty` (one for each component of the potential next move).
+    2.  **Get All Legal Moves**: Consult the game engine to get a list of all valid 4-tuple moves `(legal_fx, legal_fy, legal_tx, legal_ty)` from the current board state.
+    3.  **Score Legal Moves**: For each legal move `(m_fx, m_fy, m_tx, m_ty)` from the list:
+        *   Retrieve the corresponding logits from the model's output (e.g., `L_fx[m_fx_token_id]`, etc.).
+        *   Calculate a score for this move. This is typically the sum of the log-probabilities (or just sum of logits if only taking the max). For example: `score = log_softmax(L_fx)[m_fx] + log_softmax(L_fy)[m_fy] + log_softmax(L_tx)[m_tx] + log_softmax(L_ty)[m_ty]`.
+    4.  **Select Best Legal Move**: Choose the legal move with the highest score. This is the predicted move `(selected_fx, selected_fy, selected_tx, selected_ty)`.
+    5.  The 4 token IDs corresponding to this selected move form the next part of the sequence.
+*   Append the 4 predicted token IDs (`selected_fx_id`, `selected_fy_id`, `selected_tx_id`, `selected_ty_id`) to the input sequence.
+*   Apply the `(selected_fx, selected_fy, selected_tx, selected_ty)` move to the game engine to update the board state.
+*   Check if the game has ended (win, loss, draw).
+*   If not ended, use the new, extended sequence as input for the next prediction step.
+*   Stop when the game engine signals termination or a maximum number of moves is reached.
+
+---
+
+## Step 6: Evaluation Metrics
+
+*   **Prediction Accuracy:** All 4 components of the move `(fx, fy, tx, ty)` are correctly predicted for a given step.
+*   **Perplexity:** Can be calculated for each head or as a combined measure.
+*   **Win Rate:** Assess performance by playing against existing Chinese chess agents.
+
+---
+
+## Step 7: Optional - Add Board State Conditioning (Advanced)
+
+* Encode current board as additional input tokens or features
+* Concatenate or combine with move tokens embeddings
+* Model predicts moves conditioned on actual board state, improving accuracy
+
+---
+
+## Summary Checklist
+
+| Step                                     | Status |
+| ---------------------------------------- | ------ |
+| Vocabulary & Tokenization                | [ ]    |
+| Dataset Preparation                      | [ ]    |
+| GPT Model Architecture                   | [ ]    |
+| Training Loop                            | [ ]    |
+| Move Generation Logic (incl. Game Logic) | [ ]    |
+| Evaluation Metrics                       | [ ]    |
+| Optional Board Conditioning              | [ ]    |
+
+
