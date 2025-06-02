@@ -119,14 +119,71 @@ Here's my plan **without an `<end>` token**, focusing on GPT-style modeling of C
 
 ## Summary Checklist
 
-| Step                                     | Status |
-| ---------------------------------------- | ------ |
-| Vocabulary & Tokenization                | [ ]    |
-| Dataset Preparation                      | [ ]    |
-| GPT Model Architecture                   | [ ]    |
-| Training Loop                            | [ ]    |
-| Move Generation Logic (incl. Game Logic) | [ ]    |
-| Evaluation Metrics                       | [ ]    |
-| Optional Board Conditioning              | [ ]    |
+| Step                                     | Status        |
+| ---------------------------------------- | ------------- |
+| Vocabulary & Tokenization                | Done          |
+| Dataset Preparation                      | Done          |
+| GPT Model Architecture                   | Done          |
+| Training Loop                            | Done          |
+| Move Generation Logic (incl. Game Logic) | In Progress   |
+| Evaluation Metrics                       | To Do         |
+| Optional Board Conditioning              | To Do         |
+
+
+## Current Progress (October 2023 - Evolving)
+
+*   **Project Setup**: Initialized project with `uv` and basic structure.
+*   **Constants**: Defined board dimensions, special tokens (`<pad>`, `<start>`, `<unk>`), unified input vocabulary (41 tokens: `fx_0..8`, `fy_0..9`, etc.), and output class counts in `elephant_former/constants.py`.
+*   **PGN Parser (`elephant_former/data/elephant_parser.py`)**: 
+    *   `ElephantGame` dataclass stores metadata and `iccs_moves_string`.
+    *   `parsed_moves` property on `ElephantGame` lazily parses the `iccs_moves_string` into a list of individual move strings (e.g., `["H2-E2", "C9-E7"]`).
+    *   `parse_iccs_pgn_file` parses PGN files into a list of `ElephantGame` objects.
+    *   `games_to_pgn_string` and `save_games_to_pgn_file` utilities for writing games back to PGN format.
+    *   Tested with a `__main__` block including save and re-parse validation.
+*   **Tokenization Utilities (`elephant_former/data_utils/tokenization_utils.py`)**:
+    *   `parse_iccs_move_to_coords`: Converts ICCS move string (e.g., "A0-B0") to `(fx, fy, tx, ty)` integer tuple.
+    *   `coords_to_unified_token_ids`: Converts `(fx, fy, tx, ty)` tuple to a list of 4 unified input token IDs.
+    *   `generate_training_sequences_from_game`: Takes an `ElephantGame` (using its `parsed_moves` property) and produces `(input_token_ids_sequence, target_coordinate_tuple)` pairs for training.
+*   **PyTorch Dataset & DataLoader (`elephant_former/data_utils/dataset.py`)**:
+    *   `ElephantChessDataset` (PyTorch `Dataset`):
+        *   Accepts either `file_paths` to PGNs or a list of pre-loaded `ElephantGame` objects.
+        *   Uses the parser and tokenization utils to generate all training instances.
+        *   Implements `__len__` and `__getitem__`.
+        *   Includes `min_game_len_moves` to filter short games.
+    *   `elephant_collate_fn`:
+        *   Pads input sequences in a batch to the same length using `PAD_TOKEN_ID`.
+        *   Formats targets into four separate tensors for the four output heads.
+*   **Model Architecture (`elephant_former/models/transformer_model.py`)**:
+    *   `ElephantFormerGPT` (`nn.Module`):
+        *   Token embedding, learned positional embedding.
+        *   `nn.TransformerEncoder` (using `nn.TransformerEncoderLayer`, `batch_first=True`).
+        *   Four linear output heads (for fx, fy, tx, ty).
+        *   `forward` method takes `src`, `src_mask` (causal), `src_padding_mask` (boolean) and returns 4 logit tensors.
+    *   `generate_square_subsequent_mask` helper for causal masking.
+*   **PyTorch Lightning Module (`elephant_former/training/lightning_module.py`)**:
+    *   `LightningElephantFormer` (`pl.LightningModule`):
+        *   Initializes `ElephantFormerGPT` model and four `nn.CrossEntropyLoss` functions (corrected to not use `ignore_index`).
+        *   `_calculate_loss` helper for summing losses from the four heads, using logits from the last non-padded input token.
+        *   `training_step`, `validation_step`, `test_step` defined for loss calculation and logging.
+        *   `configure_optimizers` (currently `AdamW`).
+*   **Training Script (`train.py`)**:
+    *   Uses PyTorch Lightning `Trainer`.
+    *   Command-line arguments for hyperparameters (data paths, model dims, training params, etc.).
+    *   **Data Handling**:
+        *   Loads all games from a PGN file.
+        *   Splits data into **train, validation, and test sets** based on specified ratios (`--test_split_ratio`, `--val_split_ratio`).
+        *   Optionally saves these three data splits to new PGN files in `--output_split_dir`.
+        *   Creates `DataLoader`s for train, validation, and test sets using `ElephantChessDataset`.
+    *   **Callbacks**:
+        *   `ModelCheckpoint`: Saves model checkpoints based on `val_loss` (best and last), configured via `--checkpoint_dir`.
+        *   `EarlyStopping`: Stops training if `val_loss` doesn't improve for a given patience (`--early_stopping_patience`).
+    *   **Workflow**: `trainer.fit()` for training and validation, followed by `trainer.test()` on the test set (loading the best checkpoint).
+*   **Design Notes (`design_notes.md`)**: Notes on board state conditioning importance.
+*   **Dependencies**: `pytorch-lightning`, `numpy`.
+
+**Next Steps (High-Level from Plan):**
+*   Focus on **Step 5: Move Generation/Inference**.
+*   Implement Evaluation Metrics (Step 6).
+*   Consider Board State Conditioning (Step 7).
 
 

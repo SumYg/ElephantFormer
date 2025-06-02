@@ -1,0 +1,24 @@
+[Event "Sample Game 1"]
+[Site "Local"]
+[Date "2024.01.01"]
+[Round "1"]
+[White "PlayerA"]
+[Black "PlayerB"]
+[Result "1-0"]
+
+1. H2-E2 C9-E7
+2. E2-D2 H9-G7
+3. A0-A1 B0-B1
+1-0
+
+[Event "Sample Game 2"]
+[Site "Local"]
+[Date "2024.01.02"]
+[Round "2"]
+[White "PlayerC"]
+[Black "PlayerD"]
+[Result "0-1"]
+
+1. A3-A4 C6-D6
+2. B0-C0 G9-F9
+0-1 
