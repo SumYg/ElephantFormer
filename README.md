@@ -1,6 +1,20 @@
 # ElephantFormer
 A Transformer-based move prediction model for Elephant Chess.
 
+## Getting Started
+
+### Running the Example Parser
+To try out the ICCS format parser with the example dataset:
+
+```bash
+uv run python -m examples.parse_games
+```
+
+This will parse the sample games file and display information about the first game, including:
+- Player names
+- Game result
+- Number of moves
+- First 10 moves in ICCS format
 
 # Plan
 Here's my plan **without an `<end>` token**, focusing on GPT-style modeling of Chinese chess moves as `(from_x, from_y, to_x, to_y)` token sequences:

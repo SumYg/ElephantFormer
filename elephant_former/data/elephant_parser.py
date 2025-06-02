@@ -10,6 +10,7 @@ class ElephantGame:
     """Represents a single game of Elephant Chess with metadata and moves."""
     metadata: Dict[str, str]
     moves: List[str]
+    move_format: str = "ICCS"  # Format of the moves (ICCS, WXF, etc.)
     
     @property
     def red_player(self) -> str:
@@ -31,8 +32,8 @@ class ElephantGame:
         """Get the initial FEN position if available."""
         return self.metadata.get('FEN')
 
-def parse_game_string(game_text: str) -> ElephantGame:
-    """Parse a single game string into an ElephantGame object.
+def parse_iccs_game(game_text: str) -> ElephantGame:
+    """Parse a single game string in ICCS format into an ElephantGame object.
     
     Args:
         game_text: Raw game text in PGN format with ICCS moves
@@ -60,13 +61,13 @@ def parse_game_string(game_text: str) -> ElephantGame:
         if match.group(2):  # Black's move (if exists)
             moves.append(match.group(2))
     
-    return ElephantGame(metadata=metadata, moves=moves)
+    return ElephantGame(metadata=metadata, moves=moves, move_format="ICCS")
 
-def parse_pgn_file(file_path: str | Path) -> List[ElephantGame]:
-    """Parse a PGN file containing multiple Elephant Chess games.
+def parse_iccs_pgn_file(file_path: str | Path) -> List[ElephantGame]:
+    """Parse a PGN file containing multiple Elephant Chess games in ICCS format.
     
     Args:
-        file_path: Path to the PGN file
+        file_path: Path to the PGN file containing ICCS format moves
         
     Returns:
         List of ElephantGame objects
@@ -87,7 +88,7 @@ def parse_pgn_file(file_path: str | Path) -> List[ElephantGame]:
     if current_game:
         games.append('\n'.join(current_game))
     
-    return [parse_game_string(game) for game in games]
+    return [parse_iccs_game(game) for game in games]
 
 def format_moves(game: ElephantGame, num_moves: int = 10) -> str:
     """Format the first N moves of a game for display.
