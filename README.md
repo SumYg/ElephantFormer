@@ -16,6 +16,50 @@ This will parse the sample games file and display information about the first ga
 - Number of moves
 - First 10 moves in ICCS format
 
+### Running Training
+To train the ElephantFormer model, you need to run the `train.py` script. You must provide the path to a PGN file containing the games for training.
+
+Here is an example command for a quick test run using a sample dataset:
+
+```bash
+uv run python train.py \
+    --pgn_file_path data/sample_games.pgn \
+    --test_split_ratio 0.5 \
+    --val_split_ratio 0.5 \
+    --output_split_dir data/splits_3way \
+    --max_epochs 5 \
+    --batch_size 1 \
+    --d_model 32 \
+    --nhead 2 \
+    --num_encoder_layers 1 \
+    --dim_feedforward 64 \
+    --max_seq_len 32 \
+    --accelerator cpu \
+    --num_workers 0 \
+    --checkpoint_dir "training_checkpoints_3way" \
+    --early_stopping_patience 2
+```
+
+**Explanation of the example command:**
+
+*   `--pgn_file_path data/sample_games.pgn`: Uses the small sample PGN file.
+*   `--test_split_ratio 0.5` & `--val_split_ratio 0.5`: Splits the data evenly for quick testing (50% test, then 50% of remaining for validation, leaving 25% for train).
+*   `--output_split_dir data/splits_3way`: Saves the PGN splits into `data/splits_3way`.
+*   `--max_epochs 5`: Runs for a small number of epochs.
+*   `--batch_size 1`: Uses a minimal batch size.
+*   `--d_model 32 --nhead 2 --num_encoder_layers 1 --dim_feedforward 64 --max_seq_len 32`: Uses very small model parameters for faster execution on CPU.
+*   `--accelerator cpu`: Explicitly uses CPU.
+*   `--num_workers 0`: Uses the main process for data loading.
+*   `--checkpoint_dir "training_checkpoints_3way"`: Saves checkpoints to a specific directory for this test run.
+*   `--early_stopping_patience 2`: Stops early if no improvement after 2 epochs.
+
+For training with your actual dataset and larger models, you would typically adjust these parameters (e.g., use your full PGN, different split ratios, larger model dimensions, more epochs, GPU accelerator if available, etc.).
+
+For a full list of options and their defaults, run:
+```bash
+uv run python train.py --help
+```
+
 # Plan
 Here's my plan **without an `<end>` token**, focusing on GPT-style modeling of Chinese chess moves as `(from_x, from_y, to_x, to_y)` token sequences:
 
