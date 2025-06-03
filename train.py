@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 import random # For shuffling games before split
+import json # For saving arguments
 
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader, random_split # random_split might also be an option for datasets
@@ -20,6 +21,27 @@ def main(args):
         print(f"No games found in {args.pgn_file_path}. Exiting.")
         return
     print(f"Loaded {len(all_games)} games in total.")
+
+    # Apply subset_ratio if specified
+    if 0.0 < args.subset_ratio < 1.0:
+        random.shuffle(all_games) # Shuffle before taking a subset
+        subset_size = int(len(all_games) * args.subset_ratio)
+        all_games = all_games[:subset_size]
+        print(f"Using a subset of {subset_size} games ({args.subset_ratio*100:.2f}% of total) for training/validation/testing.")
+    elif args.subset_ratio < 0.0 or args.subset_ratio > 1.0:
+        print(f"Warning: subset_ratio ({args.subset_ratio}) is outside the valid range (0.0, 1.0]. Using all data.")
+
+    # Save training arguments
+    if args.checkpoint_dir:
+        output_dir = Path(args.checkpoint_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        args_save_path = output_dir / "training_args.json"
+        try:
+            with open(args_save_path, 'w') as f:
+                json.dump(vars(args), f, indent=4)
+            print(f"Saved training arguments to: {args_save_path}")
+        except Exception as e:
+            print(f"Error saving training arguments: {e}")
 
     train_games: List[ElephantGame]
     val_games: List[ElephantGame] = []
@@ -158,10 +180,17 @@ def main(args):
 
     # 4. Train
     print("Starting training...")
+    ckpt_path_to_resume = None
+    if args.resume_from_checkpoint and Path(args.resume_from_checkpoint).exists():
+        ckpt_path_to_resume = args.resume_from_checkpoint
+        print(f"Resuming training from checkpoint: {ckpt_path_to_resume}")
+    elif args.resume_from_checkpoint:
+        print(f"WARNING: Specified checkpoint {args.resume_from_checkpoint} not found. Starting training from scratch.")
+
     if val_dataloader:
-        trainer.fit(model, train_dataloader, val_dataloader)
+        trainer.fit(model, train_dataloader, val_dataloader, ckpt_path=ckpt_path_to_resume)
     else:
-        trainer.fit(model, train_dataloader)
+        trainer.fit(model, train_dataloader, ckpt_path=ckpt_path_to_resume)
     print("Training finished.")
 
     # 5. Test
@@ -192,13 +221,14 @@ if __name__ == '__main__':
     parser.add_argument("--pgn_file_path", type=str, required=True, help="Path to the PGN file for training.")
     parser.add_argument("--val_split_ratio", type=float, default=0.1, help="Ratio of NON-TEST data to use for validation (e.g., 0.1 for 10% of non-test data).")
     parser.add_argument("--test_split_ratio", type=float, default=0.1, help="Ratio of total data to use for the test set (e.g., 0.1 for 10% of total). Set to 0 to disable test set.")
+    parser.add_argument("--subset_ratio", type=float, default=1.0, help="Ratio of the total dataset to use (e.g., 0.1 for 10%). Applied after loading all games, before splitting. Default 1.0 (use all data).")
     parser.add_argument("--output_split_dir", type=str, default=None, help="Directory to save train/validation/test split PGN files. If None, splits are not saved.")
     # parser.add_argument("--val_pgn_file_path", type=str, default=None, help="Path to the PGN file for validation.")
     # parser.add_argument("--test_pgn_file_path", type=str, default=None, help="Path to the PGN file for testing.")
     parser.add_argument("--num_workers", type=int, default=0, help="Number of workers for DataLoader.")
 
     # Model HParams (from LightningElephantFormer)
-    parser.add_argument("--max_seq_len", type=int, default=128, help="Maximum sequence length.") # Also used by Dataset
+    parser.add_argument("--max_seq_len", type=int, default=512, help="Maximum sequence length.") # Also used by Dataset
     parser.add_argument("--d_model", type=int, default=256, help="Model dimension.")
     parser.add_argument("--nhead", type=int, default=8, help="Number of attention heads.")
     parser.add_argument("--num_encoder_layers", type=int, default=6, help="Number of encoder layers.")
@@ -213,7 +243,8 @@ if __name__ == '__main__':
     parser.add_argument("--accelerator", type=str, default="auto", choices=["cpu", "gpu", "tpu", "mps", "auto"], help="Accelerator to use.")
     parser.add_argument("--devices", type=int, default=1, help="Number of devices to use (e.g., GPUs).")
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", help="Directory to save model checkpoints.")
-    parser.add_argument("--early_stopping_patience", type=int, default=5, help="Number of epochs with no improvement after which training will be stopped. Set to 0 to disable.")
+    parser.add_argument("--early_stopping_patience", type=int, default=2, help="Number of epochs with no improvement after which training will be stopped. Set to 0 to disable.")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to a checkpoint file to resume training from (e.g., checkpoints/last.ckpt).")
     
     args = parser.parse_args()
     main(args) 
