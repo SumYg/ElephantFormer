@@ -2,6 +2,7 @@
 
 import numpy as np
 from typing import Tuple, List, Optional
+from enum import Enum
 
 # --- Constants ---
 
@@ -9,9 +10,13 @@ from typing import Tuple, List, Optional
 BOARD_WIDTH = 9
 BOARD_HEIGHT = 10
 
-# Players
-RED = 0  # Typically moves first
-BLACK = 1
+# Players - Replaced with Enum below
+# RED = 0
+# BLACK = 1
+
+class Player(Enum):
+    RED = 0
+    BLACK = 1
 
 # Piece Names (integers for board representation, sign for color)
 # Positive for RED, Negative for BLACK
@@ -68,7 +73,7 @@ def get_piece_from_char(char: str) -> int:
     return EMPTY
 
 
-def fen_to_board(fen: str = INITIAL_BOARD_FEN) -> Tuple[Board, int]:
+def fen_to_board(fen: str = INITIAL_BOARD_FEN) -> Tuple[Board, Player]:
     """
     Converts a FEN string (Forsyth-Edwards Notation for Elephant Chess) to a board representation.
     Only parses the piece placement part and current player.
@@ -95,7 +100,7 @@ def fen_to_board(fen: str = INITIAL_BOARD_FEN) -> Tuple[Board, int]:
                 board[y, x] = get_piece_from_char(char_in_row)
                 x += 1
     
-    current_player = RED if player_to_move_char == 'w' or player_to_move_char == 'r' else BLACK
+    current_player = Player.RED if player_to_move_char == 'w' or player_to_move_char == 'r' else Player.BLACK
     return board, current_player
 
 
@@ -113,9 +118,13 @@ class ElephantChessGame:
         """Returns the current board state as a NumPy array."""
         return np.copy(self.board)
 
-    def get_current_player(self) -> int:
+    def get_current_player(self) -> Player:
         """Returns the current player (RED or BLACK)."""
         return self.current_player
+
+    def get_opponent(self, player: Player) -> Player:
+        """Returns the opponent of the given player."""
+        return Player.BLACK if player == Player.RED else Player.RED
 
     def is_valid_coord(self, x: int, y: int) -> bool:
         """Checks if coordinates are within board limits."""
@@ -141,19 +150,19 @@ class ElephantChessGame:
             s += " |\n"
         s += "  +------------------+\n"
         s += "    0 1 2 3 4 5 6 7 8 (x)\n"
-        s += f"Current player: {'RED' if self.current_player == RED else 'BLACK'}\n"
+        s += f"Current player: {self.current_player.name}\n"
         return s
 
-    def _is_within_palace(self, x: int, y: int, player: int) -> bool:
+    def _is_within_palace(self, x: int, y: int, player: Player) -> bool:
         """Checks if (x,y) is within the player's palace."""
         if not (3 <= x <= 5):
             return False
-        if player == RED:
+        if player == Player.RED:
             return 0 <= y <= 2
         else: # BLACK
             return 7 <= y <= 9
 
-    def _get_king_moves(self, x: int, y: int, player: int) -> List[Move]:
+    def _get_king_moves(self, x: int, y: int, player: Player) -> List[Move]:
         """Generates legal moves for a King at (x,y) for the given player."""
         moves: List[Move] = []
         # King moves one step orthogonally
@@ -171,7 +180,8 @@ class ElephantChessGame:
         # Flying General rule: Kings cannot face each other directly on the same file
         # without any intervening pieces.
         op_king_x, op_king_y = -1, -1
-        opponent_king_piece = B_KING if player == RED else R_KING
+        opponent_player_enum = self.get_opponent(player)
+        opponent_king_piece = B_KING if opponent_player_enum == Player.BLACK else R_KING
         
         found_op_king = False
         for r_idx in range(BOARD_HEIGHT): # Renamed r to r_idx
@@ -221,7 +231,7 @@ class ElephantChessGame:
         
         return moves
 
-    def _get_advisor_moves(self, x: int, y: int, player: int) -> List[Move]:
+    def _get_advisor_moves(self, x: int, y: int, player: Player) -> List[Move]:
         """Generates legal moves for an Advisor at (x,y) for the given player."""
         moves: List[Move] = []
         piece_at_src = self.board[y,x] 
@@ -237,7 +247,7 @@ class ElephantChessGame:
                     moves.append((x, y, nx, ny))
         return moves
 
-    def _get_elephant_moves(self, x: int, y: int, player: int) -> List[Move]:
+    def _get_elephant_moves(self, x: int, y: int, player: Player) -> List[Move]:
         """Generates legal moves for an Elephant at (x,y) for the given player."""
         moves: List[Move] = []
         piece_at_src = self.board[y,x]
@@ -255,9 +265,9 @@ class ElephantChessGame:
             is_red_side = (0 <= ny <= 4)
             is_black_side = (5 <= ny <= 9)
 
-            if player == RED and not is_red_side:
+            if player == Player.RED and not is_red_side:
                 continue 
-            if player == BLACK and not is_black_side:
+            if player == Player.BLACK and not is_black_side:
                 continue 
 
             if self.is_valid_coord(nx, ny):
@@ -267,7 +277,7 @@ class ElephantChessGame:
                         moves.append((x, y, nx, ny))
         return moves
 
-    def _get_horse_moves(self, x: int, y: int, player: int) -> List[Move]:
+    def _get_horse_moves(self, x: int, y: int, player: Player) -> List[Move]:
         """Generates legal moves for a Horse at (x,y) for the given player."""
         moves: List[Move] = []
         piece_at_src = self.board[y,x] 
@@ -290,7 +300,7 @@ class ElephantChessGame:
                         moves.append((x, y, nx, ny))
         return moves
 
-    def _get_chariot_moves(self, x: int, y: int, player: int) -> List[Move]:
+    def _get_chariot_moves(self, x: int, y: int, player: Player) -> List[Move]:
         """Generates legal moves for a Chariot at (x,y) for the given player."""
         moves: List[Move] = []
         piece_at_src = self.board[y,x] 
@@ -314,7 +324,7 @@ class ElephantChessGame:
                     break 
         return moves
 
-    def _get_cannon_moves(self, x: int, y: int, player: int) -> List[Move]:
+    def _get_cannon_moves(self, x: int, y: int, player: Player) -> List[Move]:
         """Generates legal moves for a Cannon at (x,y) for the given player."""
         moves: List[Move] = []
         piece_at_src = self.board[y,x]
@@ -344,7 +354,7 @@ class ElephantChessGame:
                         break 
         return moves
 
-    def _get_soldier_moves(self, x: int, y: int, player: int) -> List[Move]:
+    def _get_soldier_moves(self, x: int, y: int, player: Player) -> List[Move]:
         """Generates legal moves for a Soldier at (x,y) for the given player."""
         moves: List[Move] = []
         piece_at_src = self.board[y,x] 
@@ -352,7 +362,7 @@ class ElephantChessGame:
 
         potential_deltas: List[Tuple[int,int]] = []
 
-        if player == RED:
+        if player == Player.RED:
             potential_deltas.append((0, 1))
             if y >= 5:
                 potential_deltas.append((1, 0))  
@@ -381,53 +391,52 @@ class ElephantChessGame:
         if piece == EMPTY:
             return []
 
-        player = RED if piece > 0 else BLACK
-        abs_piece = abs(piece)
+        player_of_piece = Player.RED if piece > 0 else Player.BLACK
 
-        if abs_piece == R_KING: 
-            return self._get_king_moves(x, y, player)
-        elif abs_piece == R_ADVISOR:
-            return self._get_advisor_moves(x, y, player)
-        elif abs_piece == R_ELEPHANT:
-            return self._get_elephant_moves(x, y, player)
-        elif abs_piece == R_HORSE:
-            return self._get_horse_moves(x, y, player)
-        elif abs_piece == R_CHARIOT:
-            return self._get_chariot_moves(x, y, player)
-        elif abs_piece == R_CANNON:
-            return self._get_cannon_moves(x, y, player)
-        elif abs_piece == R_SOLDIER:
-            return self._get_soldier_moves(x, y, player)
+        if abs(piece) == R_KING: 
+            return self._get_king_moves(x, y, player_of_piece)
+        elif abs(piece) == R_ADVISOR:
+            return self._get_advisor_moves(x, y, player_of_piece)
+        elif abs(piece) == R_ELEPHANT:
+            return self._get_elephant_moves(x, y, player_of_piece)
+        elif abs(piece) == R_HORSE:
+            return self._get_horse_moves(x, y, player_of_piece)
+        elif abs(piece) == R_CHARIOT:
+            return self._get_chariot_moves(x, y, player_of_piece)
+        elif abs(piece) == R_CANNON:
+            return self._get_cannon_moves(x, y, player_of_piece)
+        elif abs(piece) == R_SOLDIER:
+            return self._get_soldier_moves(x, y, player_of_piece)
         else:
             return [] 
 
-    def _find_king(self, player: int, board_state: Optional[Board] = None) -> Optional[Tuple[int, int]]:
+    def _find_king(self, player: Player, board_state: Optional[Board] = None) -> Optional[Tuple[int, int]]:
         """Finds the coordinates (x,y) of the specified player's king."""
         b = board_state if board_state is not None else self.board
-        king_piece_const = R_KING if player == RED else B_KING # Renamed
-        for r_idx in range(BOARD_HEIGHT): # Renamed
-            for c_idx in range(BOARD_WIDTH): # Renamed
-                if b[r_idx,c_idx] == king_piece_const:
+        king_piece = R_KING if player == Player.RED else B_KING
+        for r_idx in range(BOARD_HEIGHT):
+            for c_idx in range(BOARD_WIDTH):
+                if b[r_idx,c_idx] == king_piece:
                     return c_idx, r_idx
         return None 
 
-    def is_square_attacked_by(self, x: int, y: int, attacker_player: int, board_state: Optional[Board] = None) -> bool:
+    def is_square_attacked_by(self, x: int, y: int, attacker_player: Player, board_state: Optional[Board] = None) -> bool:
         """
-        Checks if the square (x,y) is attacked by any piece of the attacker_player.
+        Checks if the square (x,y) is attacked by any piece of attacker_player.
         Uses pseudo-legal moves (doesn't consider if attacker's king becomes checked).
         """
         b = board_state if board_state is not None else self.board
-        original_board_state = self.board # Renamed
+        original_board_state = self.board
         if board_state is not None:
             self.board = board_state 
 
         is_attacked = False
-        for r_idx in range(BOARD_HEIGHT): # Renamed
-            for c_idx in range(BOARD_WIDTH): # Renamed
+        for r_idx in range(BOARD_HEIGHT):
+            for c_idx in range(BOARD_WIDTH):
                 piece = b[r_idx,c_idx]
-                if piece != EMPTY and (RED if piece > 0 else BLACK) == attacker_player:
+                if piece != EMPTY and (Player.RED if piece > 0 else Player.BLACK) == attacker_player:
                     attacker_moves = self.get_legal_moves_for_piece(c_idx, r_idx)
-                    for move_candidate in attacker_moves: # Renamed
+                    for move_candidate in attacker_moves:
                         _fx, _fy, tx, ty = move_candidate
                         if tx == x and ty == y:
                             is_attacked = True
@@ -441,7 +450,7 @@ class ElephantChessGame:
             self.board = original_board_state 
         return is_attacked
 
-    def is_king_in_check(self, player: int, board_state: Optional[Board] = None) -> bool:
+    def is_king_in_check(self, player: Player, board_state: Optional[Board] = None) -> bool:
         """Checks if the specified player's king is currently in check."""
         b = board_state if board_state is not None else self.board
         king_coords = self._find_king(player, b)
@@ -449,11 +458,11 @@ class ElephantChessGame:
             return True 
         
         king_x, king_y = king_coords
-        opponent_player = BLACK if player == RED else RED
+        opponent = self.get_opponent(player)
         
-        return self.is_square_attacked_by(king_x, king_y, opponent_player, b)
+        return self.is_square_attacked_by(king_x, king_y, opponent, b)
 
-    def get_all_legal_moves(self, player: int) -> List[Move]:
+    def get_all_legal_moves(self, player: Player) -> List[Move]:
         """
         Generates all fully legal moves for the specified player.
         A move is legal if it does not leave the player's own king in check.
@@ -461,16 +470,16 @@ class ElephantChessGame:
         legal_moves: List[Move] = []
         current_player_pieces = []
 
-        for r_idx in range(BOARD_HEIGHT): # Renamed
-            for c_idx in range(BOARD_WIDTH): # Renamed
+        for r_idx in range(BOARD_HEIGHT):
+            for c_idx in range(BOARD_WIDTH):
                 piece = self.board[r_idx,c_idx]
-                if piece != EMPTY and (RED if piece > 0 else BLACK) == player:
+                if piece != EMPTY and (Player.RED if piece > 0 else Player.BLACK) == player:
                     current_player_pieces.append((c_idx,r_idx)) 
 
         for x, y in current_player_pieces:
             pseudo_legal_moves = self.get_legal_moves_for_piece(x, y)
             
-            for move_candidate in pseudo_legal_moves: # Renamed
+            for move_candidate in pseudo_legal_moves:
                 fx, fy, tx, ty = move_candidate
                 
                 temp_board = self.board.copy()
@@ -503,29 +512,31 @@ class ElephantChessGame:
         
         self.move_history.append(move)
         
-        self.current_player = BLACK if self.current_player == RED else RED
+        self.current_player = self.get_opponent(self.current_player)
         
         self.halfmove_clock += 1 
-        if self.current_player == RED: 
+        if self.current_player == Player.RED: 
             self.fullmove_number += 1
 
-    def check_game_over(self) -> Optional[str]:
+    def check_game_over(self) -> Tuple[Optional[str], Optional[Player]]:
         """
         Checks if the game has ended due to checkmate or stalemate.
-        Returns: "RED_WINS", "BLACK_WINS", "DRAW", or None if ongoing.
+        Returns a tuple: (status_string or None, winner_player_enum or None).
+        Status can be "checkmate", "stalemate".
+        Winner is the player who won, or None if draw/ongoing.
         """
         player = self.current_player
         legal_moves = self.get_all_legal_moves(player)
 
         if not legal_moves: 
-            is_in_check_flag = self.is_king_in_check(player) # Renamed
+            is_in_check_flag = self.is_king_in_check(player)
             if is_in_check_flag:
-                return "BLACK_WINS" if player == RED else "RED_WINS"
+                return "checkmate", self.get_opponent(player)
             else:
-                return "DRAW"
+                return "stalemate", None
         
         # TODO: Add other draw conditions like repetition, insufficient material (less common in Elephant Chess), etc.
-        return None 
+        return None, None
 
 if __name__ == '__main__':
     game = ElephantChessGame()
@@ -550,8 +561,8 @@ if __name__ == '__main__':
     print(f"Piece at (0,3) (Red Soldier pos): {PIECE_NAMES.get(game_from_fen.get_piece_at(0,3))}") 
     print(f"Piece at (1,2) (Red Cannon pos): {PIECE_NAMES.get(game_from_fen.get_piece_at(1,2))}") 
     
-    print(f"Initial player: {'RED' if game_from_fen.current_player == RED else 'BLACK'}")
+    print(f"Initial player: {game_from_fen.current_player.name}")
     
     custom_fen_black_turn = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR b - - 0 1"
     game_black_turn = ElephantChessGame(fen=custom_fen_black_turn)
-    print(f"Player for FEN with 'b': {'RED' if game_black_turn.current_player == RED else 'BLACK'}") 
+    print(f"Player for FEN with 'b': {game_black_turn.current_player.name}") 

@@ -7,28 +7,31 @@ import argparse # For command-line arguments
 from typing import List, Tuple, Optional
 from pathlib import Path
 
-from elephant_former.engine.elephant_chess_game import ElephantChessGame, Move, RED, BLACK, PIECE_NAMES
+from elephant_former.engine.elephant_chess_game import ElephantChessGame, Move, Player, PIECE_NAMES
 from elephant_former.training.lightning_module import LightningElephantFormer # To load the model
 from elephant_former.models.transformer_model import generate_square_subsequent_mask # Import for causal mask
 from elephant_former.data_utils.tokenization_utils import coords_to_unified_token_ids
-from elephant_former import constants
+from elephant_former.constants import START_TOKEN_ID, PAD_TOKEN_ID # Corrected path
 
 class MoveGenerator:
-    def __init__(self, model_path: Optional[str] = None, device: str = 'cpu'):
-        self.game = ElephantChessGame()
-        self.model: Optional[LightningElephantFormer] = None
+    def __init__(self, model_checkpoint_path: str, device: str = 'cpu', initial_fen: Optional[str] = None):
+        self.game = ElephantChessGame(fen=initial_fen)
+        self.model_checkpoint_path = model_checkpoint_path
         self.device = torch.device(device)
-        self.max_seq_len = None # Will be set from loaded model
+        self.current_fen = initial_fen
+        self.model: Optional[LightningElephantFormer] = None
+        self.max_seq_len = 0 # Initialize, will be set from loaded model
+        self.current_game_token_history: List[int] = [START_TOKEN_ID]
 
-        if model_path:
-            if not Path(model_path).exists():
-                print(f"Error: Model checkpoint not found at {model_path}")
+        if model_checkpoint_path:
+            if not Path(model_checkpoint_path).exists():
+                print(f"Error: Model checkpoint not found at {model_checkpoint_path}")
                 self.model = None
             else:
                 try:
-                    print(f"Loading model from checkpoint: {model_path}")
+                    print(f"Loading model from checkpoint: {model_checkpoint_path}")
                     self.model = LightningElephantFormer.load_from_checkpoint(
-                        checkpoint_path=model_path, 
+                        checkpoint_path=model_checkpoint_path, 
                         map_location=self.device
                     )
                     self.model.to(self.device)
@@ -36,7 +39,7 @@ class MoveGenerator:
                     self.max_seq_len = self.model.hparams.max_seq_len
                     print(f"MoveGenerator initialized with model. Max sequence length: {self.max_seq_len}")
                 except Exception as e:
-                    print(f"Error loading model from {model_path}: {e}")
+                    print(f"Error loading model from {model_checkpoint_path}: {e}")
                     self.model = None
         
         if not self.model:
@@ -59,7 +62,7 @@ class MoveGenerator:
             return random.choice(legal_moves)
 
         # 1. Prepare input sequence
-        unpadded_sequence = [constants.START_TOKEN_ID]
+        unpadded_sequence = [START_TOKEN_ID]
         for move in self.game.move_history:
             fx, fy, tx, ty = move
             token_ids = coords_to_unified_token_ids((fx, fy, tx, ty))
@@ -68,12 +71,12 @@ class MoveGenerator:
         # Handle sequence length (truncate if too long, keep start token and recent history)
         if len(unpadded_sequence) > self.max_seq_len:
             # Keep START_TOKEN and the last (max_seq_len - 1) tokens
-            unpadded_sequence = [constants.START_TOKEN_ID] + unpadded_sequence[-(self.max_seq_len - 1):]
+            unpadded_sequence = [START_TOKEN_ID] + unpadded_sequence[-(self.max_seq_len - 1):]
         
         current_seq_len = len(unpadded_sequence)
         padding_needed = self.max_seq_len - current_seq_len
         
-        final_sequence = unpadded_sequence + [constants.PAD_TOKEN_ID] * padding_needed
+        final_sequence = unpadded_sequence + [PAD_TOKEN_ID] * padding_needed
         input_tensor = torch.tensor([final_sequence], dtype=torch.long, device=self.device)
 
         # 2. Create masks
@@ -81,7 +84,7 @@ class MoveGenerator:
         causal_mask = generate_square_subsequent_mask(self.max_seq_len, device=self.device)
         
         # Padding mask: True where padded
-        padding_mask_tensor = (input_tensor == constants.PAD_TOKEN_ID)
+        padding_mask_tensor = (input_tensor == PAD_TOKEN_ID)
         if torch.all(~padding_mask_tensor): # if no padding tokens found
             padding_mask_tensor = None # Pass None if no padding, as per TransformerEncoder docs
 
@@ -135,70 +138,93 @@ class MoveGenerator:
             
         return best_move
 
-    def play_a_turn(self) -> Optional[str]: # Returns game_status or None
-        print(self.game)
-        player = self.game.get_current_player()
-        player_name = "RED" if player == RED else "BLACK"
-        print(f"Current player: {player_name} (Move {self.game.fullmove_number}.{self.game.halfmove_clock % 2 + 1})")
+    def play_a_turn(self) -> Tuple[Optional[str], Optional[Player]]:
+        """
+        Plays a single turn of the game.
+        Returns a tuple (game_over_status, winner).
+        """
+        current_player_enum = self.game.get_current_player()
+        player_name = current_player_enum.name
 
-        game_status = self.game.check_game_over()
-        if game_status:
-            print(f"Game Over! Result: {game_status}")
-            return game_status
+        print(f"\n--- {player_name}'s turn ({self.game.fullmove_number}{'.' if player_name == Player.RED.name else '...'}) ---")
 
-        legal_moves = self.game.get_all_legal_moves(player)
-        if not legal_moves:
-            final_status = self.game.check_game_over() 
-            print(f"No legal moves for {player_name}. Final status check: {final_status}")
-            return final_status if final_status else "STUCK_NO_LEGAL_MOVES_UNEXPECTED"
+        predicted_move_coords = self.get_model_predicted_move(self.game.get_all_legal_moves(current_player_enum))
 
-        # print(f"Legal moves for {player_name}: {len(legal_moves)}")
-        selected_move = self.get_model_predicted_move(legal_moves)
+        if predicted_move_coords:
+            fx, fy, tx, ty = predicted_move_coords
+            # TODO: Convert coords to ICCS-like string for better readability if desired
+            print(f"{player_name} (Model) plays: ({fx},{fy}) -> ({tx},{ty})")
+            self.game.apply_move(predicted_move_coords)
+            
+            # Add move to internal history for next prediction
+            move_token_ids = coords_to_unified_token_ids(predicted_move_coords)
+            self.current_game_token_history.extend(move_token_ids)
+            # Truncate history
+            if len(self.current_game_token_history) > self.max_seq_len:
+                self.current_game_token_history = [START_TOKEN_ID] + \
+                                                 self.current_game_token_history[-(self.max_seq_len-1):]
 
-        if selected_move:
-            fx, fy, tx, ty = selected_move
-            piece_val = self.game.get_piece_at(fx, fy)
-            piece_name = PIECE_NAMES.get(piece_val, "UnknownPiece")
-            print(f"{player_name} selects: {piece_name} from ({fx},{fy}) to ({tx},{ty})")
-            self.game.apply_move(selected_move)
+            print(self.game) # Print board after move
+            return self.game.check_game_over()
         else:
-            print(f"Error: No move could be selected for {player_name}. This might indicate an issue.")
-            # This could happen if legal_moves was empty but somehow passed the earlier check,
-            # or if get_model_predicted_move returned None despite having legal_moves.
-            return "ERROR_NO_MOVE_SELECTED"
-        
-        return self.game.check_game_over()
+            print(f"{player_name} (Model) has no legal moves.")
+            # Check if it's checkmate or stalemate
+            if self.game.is_king_in_check(current_player_enum):
+                opponent = self.game.get_opponent(current_player_enum)
+                print(f"Checkmate! {opponent.name} wins.")
+                return "checkmate", opponent
+            else:
+                print("Stalemate! It's a draw.")
+                return "stalemate", None
 
-    def run_game_loop(self, max_turns=100, fen: Optional[str] = None):
-        """Runs a game loop for a maximum number of turns or until game over."""
-        self.reset_game(fen=fen)
-        for i in range(max_turns):
-            print(f"\n--- Turn {i+1} ---")
-            status = self.play_a_turn()
-            if status:
-                print(f"\nGame finished after {i+1} turns. Final status: {status}")
-                print("Final Board:")
-                print(self.game)
-                return status
-        print(f"\nGame stopped after {max_turns} turns (max_turns reached).")
-        print("Final Board:")
-        print(self.game)
-        return "MAX_TURNS_REACHED"
+    def run_game_loop(self, max_turns: int = 100):
+        """Runs the main game loop until game over or max_turns is reached."""
+        print("Starting new game...")
+        print(f"Model: {self.model_checkpoint_path}")
+        print(f"Device: {self.device}")
+        print(f"Max sequence length: {self.max_seq_len}")
+        print(f"Initial FEN: {self.current_fen if self.current_fen else 'Default starting position'}")
+        print(f"Max turns: {max_turns}")
+        print("Initial board state:")
+        print(self.game) # Print initial board
+
+        for turn_count in range(max_turns):
+            game_over_status, winner = self.play_a_turn()
+
+            if game_over_status:
+                print(f"\n--- Game Over --- ({game_over_status})")
+                if winner:
+                    print(f"Winner: {winner.name}")
+                else:
+                    print("Result: Draw")
+                break
+            
+            if turn_count == max_turns - 1:
+                print("\n--- Game Over ---")
+                print(f"Maximum turns ({max_turns}) reached. Game is a draw.")
+                break
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="ElephantFormer Move Generator")
-    parser.add_argument("--model_path", type=str, default=None, help="Path to the trained model checkpoint (.ckpt)")
-    parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda", "mps"], help="Device to run inference on (cpu, cuda, mps)")
-    parser.add_argument("--max_turns", type=int, default=50, help="Maximum number of turns to play in the game loop.")
-    parser.add_argument("--fen", type=str, default=None, help="FEN string to start the game from a custom position.")
+    cli_parser = argparse.ArgumentParser(description="Play a game using a trained ElephantFormer model.")
+    cli_parser.add_argument("--model_checkpoint_path", type=str, required=True, help="Path to the model checkpoint (.ckpt)")
+    cli_parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda", "mps"], help="Device to use (cpu, cuda, mps)")
+    cli_parser.add_argument("--max_turns", type=int, default=100, help="Maximum number of turns for the game.")
+    cli_parser.add_argument("--fen", type=str, default=None, help="Initial FEN string to start the game from. Uses default start if not provided.")
     
-    cli_args = parser.parse_args()
+    cli_args = cli_parser.parse_args()
 
-    if cli_args.model_path:
-        print(f"Running game with model: {cli_args.model_path}")
-        generator = MoveGenerator(model_path=cli_args.model_path, device=cli_args.device)
-    else:
-        print("Running game with random moves (no model specified).")
-        generator = MoveGenerator(device=cli_args.device)
-    
-    generator.run_game_loop(max_turns=cli_args.max_turns, fen=cli_args.fen) 
+    try:
+        generator = MoveGenerator(
+            model_checkpoint_path=cli_args.model_checkpoint_path, 
+            device=cli_args.device, 
+            initial_fen=cli_args.fen # FEN is passed here
+        )
+        # The FEN is handled by the constructor. If cli_args.fen is None, MoveGenerator uses default.
+        # If a FEN is provided, it's used to initialize self.game.
+        # So, run_game_loop doesn't need it again.
+        generator.run_game_loop(max_turns=cli_args.max_turns) # Removed fen=cli_args.fen
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        # raise # Uncomment for full traceback during development 

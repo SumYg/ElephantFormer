@@ -24,20 +24,17 @@ Here is an example command for a quick test run using a sample dataset:
 ```bash
 uv run python train.py \
     --pgn_file_path data/sample_games.pgn \
-    --test_split_ratio 0.5 \
-    --val_split_ratio 0.5 \
-    --output_split_dir data/splits_3way \
-    --max_epochs 5 \
-    --batch_size 1 \
+    --test_split_ratio 0.2 \
+    --val_split_ratio 0.2 \
+    --subset_ratio 0.001 \
+    --output_split_dir data/splits \
+    --max_epochs 1 \
     --d_model 32 \
     --nhead 2 \
     --num_encoder_layers 1 \
     --dim_feedforward 64 \
     --max_seq_len 32 \
-    --accelerator cpu \
-    --num_workers 0 \
-    --checkpoint_dir "training_checkpoints_3way" \
-    --early_stopping_patience 2
+    --accelerator cpu
 ```
 
 **Explanation of the example command:**
@@ -58,6 +55,45 @@ For training with your actual dataset and larger models, you would typically adj
 For a full list of options and their defaults, run:
 ```bash
 uv run python train.py --help
+```
+
+### Running Inference (Move Generation)
+
+After training a model and having a checkpoint file (e.g., `last.ckpt` or `best.ckpt`), you can run the move generator to see the AI play moves in the console. 
+
+Example:
+```bash
+uv run python -m elephant_former.inference.generator \
+    --model_checkpoint_path checkpoints/your_trial_dir/your_model.ckpt \
+    --device cuda 
+```
+
+Replace `checkpoints/your_trial_dir/your_model.ckpt` with the actual path to your model checkpoint. You can also specify `--device cpu` if you don't have a CUDA-enabled GPU, or adjust `--max_turns` and `--fen` for different game configurations.
+
+### Running Evaluation
+
+To evaluate a trained model on various metrics, use the `evaluator.py` script.
+
+**Example: Calculating Win Rate against a Random Opponent**
+```bash
+uv run python -m elephant_former.evaluation.evaluator \
+    --model_path checkpoints/your_trial_dir/your_model.ckpt \
+    --pgn_file_path data/your_splits_dir/test_split.pgn \
+    --device cuda \
+    --metric win_rate \
+    --num_win_rate_games 50 \
+    --max_turns_win_rate 150
+```
+
+Replace checkpoint and PGN paths accordingly. 
+
+Other metrics can be calculated by changing the `--metric` argument:
+*   `--metric accuracy`: Calculates prediction accuracy on the PGN file.
+*   `--metric perplexity`: Calculates perplexity on the PGN file.
+
+For a full list of evaluation options:
+```bash
+uv run python -m elephant_former.evaluation.evaluator --help
 ```
 
 # Plan
@@ -170,7 +206,7 @@ Here's my plan **without an `<end>` token**, focusing on GPT-style modeling of C
 | GPT Model Architecture                   | Done          |
 | Training Loop                            | Done          |
 | Move Generation Logic (incl. Game Logic) | In Progress   |
-| Evaluation Metrics                       | To Do         |
+| Evaluation Metrics                       | Done          |
 | Optional Board Conditioning              | To Do         |
 
 
@@ -222,12 +258,26 @@ Here's my plan **without an `<end>` token**, focusing on GPT-style modeling of C
         *   `ModelCheckpoint`: Saves model checkpoints based on `val_loss` (best and last), configured via `--checkpoint_dir`.
         *   `EarlyStopping`: Stops training if `val_loss` doesn't improve for a given patience (`--early_stopping_patience`).
     *   **Workflow**: `trainer.fit()` for training and validation, followed by `trainer.test()` on the test set (loading the best checkpoint).
+*   **Move Generation/Inference (`elephant_former/inference/generator.py`)**:
+    *   `MoveGenerator` class loads a trained model.
+    *   Implements a game loop to play against the model or have models play each other (if extended).
+    *   `get_model_predicted_move` method:
+        *   Prepares input token sequences (with padding/truncation).
+        *   Gets model logits for the next move prediction.
+        *   Scores all legal moves from the `ElephantChessGame` engine by summing log-softmax probabilities of their components.
+        *   Selects the legal move with the highest score.
+    *   CLI for running a game with a saved model.
+*   **Evaluation (`elephant_former/evaluation/evaluator.py`)**:
+    *   `ModelEvaluator` class loads a trained model.
+    *   `calculate_prediction_accuracy`: Calculates the percentage of times the model correctly predicts all four components of the next move from a PGN file.
+    *   `calculate_perplexity`: Calculates the perplexity of the model on a PGN file based on the cross-entropy loss of predicting the next move.
+    *   `calculate_win_rate`: Simulates games between the loaded model and a random opponent, reporting win/loss/draw rates. The AI's color and number of games are configurable.
+    *   CLI for running these evaluations on a saved model using a PGN dataset or simulated games.
 *   **Design Notes (`design_notes.md`)**: Notes on board state conditioning importance.
-*   **Dependencies**: `pytorch-lightning`, `numpy`.
+*   **Dependencies**: `pytorch-lightning`, `numpy`, `tqdm`.
 
 **Next Steps (High-Level from Plan):**
-*   Focus on **Step 5: Move Generation/Inference**.
-*   Implement Evaluation Metrics (Step 6).
+*   Refine and test Move Generation/Inference thoroughly.
 *   Consider Board State Conditioning (Step 7).
 
 
