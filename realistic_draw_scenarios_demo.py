@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Realistic Draw Scenarios in Xiangqi
+Realistic Draw Scenarios in Elephant Chess
 
 This demo shows realistic scenarios around draw claims and player decisions:
 1. When players would/wouldn't claim draws
@@ -197,7 +197,7 @@ def show_practical_examples():
 
 def main():
     """Run the complete realistic draw scenarios demonstration."""
-    print("REALISTIC DRAW SCENARIOS IN XIANGQI")
+    print("REALISTIC DRAW SCENARIOS IN ELEPHANT CHESS")
     print("Understanding when players actually claim draws")
     
     demonstrate_strategic_draw_decisions()
@@ -232,7 +232,7 @@ KEY TAKEAWAYS:
    - Time management plays a role
    - Opponent strength influences choices
 
-The claim-based system respects traditional chess/Xiangqi rules while
+The claim-based system respects traditional chess/Elephant Chess rules while
 giving players the strategic control they need to make informed decisions.
     """)
 

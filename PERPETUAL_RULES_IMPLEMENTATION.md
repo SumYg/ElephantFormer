@@ -2,11 +2,11 @@
 
 ## Overview
 
-This implementation replaces the simple threefold repetition rule with the comprehensive official Xiangqi perpetual check and chase regulations. The system correctly implements protection-based chase detection rather than the commonly misunderstood piece-value comparison approach.
+This implementation replaces the simple threefold repetition rule with the comprehensive official Elephant Chess perpetual check and chase regulations. The system correctly implements protection-based chase detection rather than the commonly misunderstood piece-value comparison approach.
 
 ## Research Summary
 
-After extensive research of official Xiangqi sources, including:
+After extensive research of official Elephant Chess sources, including:
 - Wikipedia Xiangqi articles
 - Club Xiangqi (CXQ) rules
 - Asian Xiangqi Federation rules
@@ -52,16 +52,15 @@ if self._is_piece_unprotected(threat_x, threat_y):
 ## New Helper Method Added
 
 ```python
-def _is_piece_unprotected(self, x: int, y: int, board_state: Optional[Board] = None) -> bool:
-    """
-    Checks if a piece at (x,y) is unprotected according to official Xiangqi rules.
+def _is_piece_unprotected(self, x: int, y: int, board_state: Optional[Board] = None) -> bool:    """
+    Checks if a piece at (x,y) is unprotected according to official Elephant Chess rules.
     A piece is unprotected if no friendly piece can capture an attacker that captures it.
     """
 ```
 
 ## Impact
 
-This correction aligns the implementation with actual official Xiangqi rules:
+This correction aligns the implementation with actual official Elephant Chess rules:
 - Removes the non-existent "piece value comparison" requirement
 - Implements protection-based chase detection as found in official sources
 - More accurately reflects the nuanced nature of perpetual chase rules
@@ -157,7 +156,7 @@ Comprehensive tests are provided in:
 
 ## Benefits of This Implementation
 
-1. **Authentic Elephant Chess Experience**: Follows official Xiangqi competition rules
+1. **Authentic Elephant Chess Experience**: Follows official Elephant Chess competition rules
 2. **Accurate Rule Implementation**: Uses protection status, not incorrect piece values
 3. **Prevents Boring Draws**: Discourages repetitive play through proper enforcement
 4. **Strategic Depth**: Players must consider perpetual patterns in their strategy
