@@ -1,8 +1,9 @@
 # elephant_former/engine/elephant_chess_game.py
 
 import numpy as np
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, Dict
 from enum import Enum
+from collections import Counter, defaultdict
 
 # --- Constants ---
 
@@ -44,6 +45,14 @@ PIECE_NAMES = {
     R_HORSE: "R_Horse", R_CHARIOT: "R_Chariot", R_CANNON: "R_Cannon", R_SOLDIER: "R_Soldier",
     B_KING: "B_King", B_ADVISOR: "B_Advisor", B_ELEPHANT: "B_Elephant",
     B_HORSE: "B_Horse", B_CHARIOT: "B_Chariot", B_CANNON: "B_Cannon", B_SOLDIER: "B_Soldier",
+}
+
+# Dictionary for a clear, unambiguous character representation of pieces.
+# Using Chinese characters for authentic representation.
+PIECE_CHARS = {
+    EMPTY: "．", # Full-width dot for spacing
+    R_KING: "帥", R_ADVISOR: "仕", R_ELEPHANT: "相", R_HORSE: "傌", R_CHARIOT: "俥", R_CANNON: "炮", R_SOLDIER: "兵",
+    B_KING: "將", B_ADVISOR: "士", B_ELEPHANT: "象", B_HORSE: "馬", B_CHARIOT: "車", B_CANNON: "砲", B_SOLDIER: "卒",
 }
 
 INITIAL_BOARD_FEN = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1" # Standard FEN for Elephant Chess
@@ -113,6 +122,12 @@ class ElephantChessGame:
         self.move_history: List[Move] = [] # Store (fx, fy, tx, ty)
         self.halfmove_clock = 0 # For draws, not fully implemented yet
         self.fullmove_number = 1 # For PGN, not fully implemented yet
+        
+        # Enhanced position and move tracking for perpetual check/chase detection
+        self.position_history = Counter() # type: Counter[str] 
+        self.position_sequence: List[str] = [] # Track sequence of positions
+        self.move_sequence: List[Tuple[Move, Player]] = [] # Track (move, player_who_made_move)
+        self._update_position_history() # Record the initial position
 
     def get_board_array(self) -> Board:
         """Returns the current board state as a NumPy array."""
@@ -136,16 +151,34 @@ class ElephantChessGame:
             return None
         return self.board[y, x]
 
-    def __str__(self) -> str:
-        """String representation of the board for printing."""
+    def __str__(self, last_move: Optional[Move] = None) -> str:
+        """
+        String representation of the board for printing.
+        Optionally highlights the last move made.
+        """
         s = "  +------------------+\n"
-        for y_idx in range(BOARD_HEIGHT -1, -1, -1): # Print from y=9 down to y=0
+        fx, fy, tx, ty = (-1,-1,-1,-1)
+        if last_move:
+            fx, fy, tx, ty = last_move
+
+        for y_idx in range(BOARD_HEIGHT -1, -1, -1):
             s += f"{y_idx} |"
             for x_idx in range(BOARD_WIDTH):
                 piece = self.board[y_idx, x_idx]
-                # Simple character representation (can be improved)
-                char_repr = PIECE_NAMES[piece][0] if piece != EMPTY else '.' # Renamed char to char_repr
-                if piece < 0 and piece != EMPTY : char_repr = char_repr.lower() # black pieces lowercase
+                char_repr = PIECE_CHARS.get(piece, '?')
+                
+                # Highlight the 'to' square of the last move
+                if x_idx == tx and y_idx == ty:
+                    # Use a different character or color to highlight the destination
+                    s += f"*{char_repr}"
+                    continue
+
+                # The 'from' square will now be empty. We can mark it.
+                if x_idx == fx and y_idx == fy:
+                    # Use a different character to show where the piece came from
+                    s += " +"
+                    continue
+                
                 s += f" {char_repr}"
             s += " |\n"
         s += "  +------------------+\n"
@@ -193,6 +226,7 @@ class ElephantChessGame:
             if found_op_king:
                 break
         
+        print(f"Found opponent king: {found_op_king}")
         if found_op_king and op_king_x == x: # Kings are on the same file
             intervening_pieces = 0
             min_y, max_y = min(y, op_king_y), max(y, op_king_y)
@@ -423,36 +457,73 @@ class ElephantChessGame:
     def is_square_attacked_by(self, x: int, y: int, attacker_player: Player, board_state: Optional[Board] = None) -> bool:
         """
         Checks if the square (x,y) is attacked by any piece of attacker_player.
-        Uses pseudo-legal moves (doesn't consider if attacker's king becomes checked).
+        Uses pseudo-legal moves (ignores checks on the attacker's king).
+        If board_state is provided, uses that; otherwise, uses current game board.
         """
-        b = board_state if board_state is not None else self.board
-        original_board_state = self.board
-        if board_state is not None:
-            self.board = board_state 
+        target_board = board_state if board_state is not None else self.board
 
-        is_attacked = False
-        for r_idx in range(BOARD_HEIGHT):
-            for c_idx in range(BOARD_WIDTH):
-                piece = b[r_idx,c_idx]
-                if piece != EMPTY and (Player.RED if piece > 0 else Player.BLACK) == attacker_player:
-                    attacker_moves = self.get_legal_moves_for_piece(c_idx, r_idx)
-                    for move_candidate in attacker_moves:
-                        _fx, _fy, tx, ty = move_candidate
-                        if tx == x and ty == y:
-                            is_attacked = True
+        # --- New block for Flying General Check ---
+        # The "Flying General" rule is a form of attack. If the square (x,y) contains the
+        # defending king, and it is on the same file as the attacking king with no
+        # intervening pieces, it is considered attacked.
+        defending_player = self.get_opponent(attacker_player)
+        defending_king_pos = self._find_king(defending_player, target_board)
+
+        # Check if the square we're interested in (x,y) actually holds the defending king.
+        # This logic is only relevant for checking if a KING is being attacked by the FLYING GENERAL rule.
+        if defending_king_pos and defending_king_pos == (x,y):
+            attacker_king_pos = self._find_king(attacker_player, target_board)
+            if attacker_king_pos:
+                ak_x, ak_y = attacker_king_pos
+                dk_x, dk_y = defending_king_pos # This is just x,y
+
+                if ak_x == dk_x: # They are on the same file
+                    intervening_pieces = 0
+                    min_y, max_y = min(ak_y, dk_y), max(ak_y, dk_y)
+                    for i_y in range(min_y + 1, max_y):
+                        if target_board[i_y, ak_x] != EMPTY:
+                            intervening_pieces += 1
                             break
-                if is_attacked:
-                    break
-            if is_attacked:
-                break
-        
-        if board_state is not None:
-            self.board = original_board_state 
-        return is_attacked
+                    if intervening_pieces == 0:
+                        return True # The square is attacked by the Flying General rule.
+        # --- End of New block ---
+
+        # Original logic for checking attacks from other pieces
+        for py in range(BOARD_HEIGHT):
+            for px in range(BOARD_WIDTH):
+                pseudo_piece_val = target_board[py, px]
+                if pseudo_piece_val != EMPTY:
+                    piece_player_for_pseudo_moves = Player.RED if pseudo_piece_val > 0 else Player.BLACK
+                    if piece_player_for_pseudo_moves == attacker_player:
+                        # We don't need to check King moves again here, as that would be a normal king move (1 step)
+                        # and the special Flying General case is now handled above.
+                        if abs(pseudo_piece_val) == R_KING:
+                            continue
+
+                        # Generate pseudo-legal moves for the attacker's piece
+                        pseudo_moves: List[Move] = []
+                        if abs(pseudo_piece_val) == R_ADVISOR:
+                            pseudo_moves = self._get_advisor_moves(px, py, attacker_player)
+                        elif abs(pseudo_piece_val) == R_ELEPHANT:
+                            pseudo_moves = self._get_elephant_moves(px, py, attacker_player)
+                        elif abs(pseudo_piece_val) == R_HORSE:
+                            pseudo_moves = self._get_horse_moves(px, py, attacker_player)
+                        elif abs(pseudo_piece_val) == R_CHARIOT:
+                            pseudo_moves = self._get_chariot_moves(px, py, attacker_player)
+                        elif abs(pseudo_piece_val) == R_CANNON:
+                            pseudo_moves = self._get_cannon_moves(px, py, attacker_player)
+                        elif abs(pseudo_piece_val) == R_SOLDIER:
+                            pseudo_moves = self._get_soldier_moves(px, py, attacker_player)
+                        
+                        for _, _, p_tx, p_ty in pseudo_moves:
+                            if p_tx == x and p_ty == y:
+                                return True # The square is attacked
+        return False
 
     def is_king_in_check(self, player: Player, board_state: Optional[Board] = None) -> bool:
         """Checks if the specified player's king is currently in check."""
         b = board_state if board_state is not None else self.board
+
         king_coords = self._find_king(player, b)
         if not king_coords:
             return True 
@@ -491,6 +562,7 @@ class ElephantChessGame:
                 if not self.is_king_in_check(player, temp_board):
                     legal_moves.append(move_candidate)
         
+        print(f"Legal moves: {legal_moves}")
         return legal_moves
 
     def apply_move(self, move: Move):
@@ -512,19 +584,266 @@ class ElephantChessGame:
         
         self.move_history.append(move)
         
+        # Track the move and player for perpetual check/chase detection
+        player_who_made_move = self.current_player  # Current player before switch
+        self.move_sequence.append((move, player_who_made_move))
+        
         self.current_player = self.get_opponent(self.current_player)
         
         self.halfmove_clock += 1 
         if self.current_player == Player.RED: 
             self.fullmove_number += 1
 
+        # Update position history *after* the move and player switch
+        self._update_position_history()
+
+    def _get_position_hash(self) -> str:
+        """
+        Creates a simple hashable representation of the current game state.
+        Includes board state and current player to move.
+        """
+        # Convert board to a tuple of tuples to make it hashable, then to string
+        board_tuple_str = str(tuple(map(tuple, self.board)))
+        player_str = self.current_player.name
+        # The combination of board and player to move defines a "position" for repetition purposes.
+        return f"{board_tuple_str}|{player_str}"
+
+    def _update_position_history(self):
+        """Updates the history of positions for repetition checking."""
+        pos_hash = self._get_position_hash()
+        self.position_history[pos_hash] += 1
+        self.position_sequence.append(pos_hash)
+
+    def _is_piece_attacking_target(self, piece_pos: Tuple[int, int], target_pos: Tuple[int, int], 
+                                   board_state: Optional[Board] = None) -> bool:
+        """
+        Checks if a piece at piece_pos is attacking/threatening the target at target_pos.
+        """
+        px, py = piece_pos
+        tx, ty = target_pos
+        b = board_state if board_state is not None else self.board
+        
+        piece = b[py, px]
+        if piece == EMPTY:
+            return False
+            
+        piece_player = Player.RED if piece > 0 else Player.BLACK
+        
+        # Temporarily set board state for move generation
+        original_board = self.board
+        self.board = b
+        moves = self.get_legal_moves_for_piece(px, py)
+        self.board = original_board
+        
+        for _, _, mx, my in moves:
+            if mx == tx and my == ty:
+                return True
+        return False
+
+    def _detect_perpetual_check(self, lookback_moves: int = 12) -> Tuple[bool, Optional[Player]]:
+        """
+        Detects perpetual check patterns according to official Elephant Chess rules.
+        Returns (is_perpetual_check, checking_player).
+        
+        A perpetual check is when:
+        1. The same position appears 3 times
+        2. The repetition is caused by one player continuously giving check
+        3. The checking player must find a different move or lose
+        """
+        if len(self.position_sequence) < 6:  # Need at least 3 repetitions
+            return False, None
+            
+        current_pos = self.position_sequence[-1]
+        if self.position_history[current_pos] < 3:
+            return False, None
+            
+        # Find the positions in the sequence where this position occurred
+        occurrence_indices = []
+        for i, pos in enumerate(self.position_sequence):
+            if pos == current_pos:
+                occurrence_indices.append(i)
+                
+        if len(occurrence_indices) < 3:
+            return False, None
+            
+        # Check if the repetitions are caused by continuous checking
+        # Look at the moves between repetitions
+        last_three_occurrences = occurrence_indices[-3:]
+        
+        # Check if opponent king was in check at each occurrence
+        checking_player = None
+        continuous_check = True
+        check_count = 0
+        
+        for occ_idx in last_three_occurrences:
+            # Reconstruct board state at this position
+            if occ_idx < len(self.move_sequence):
+                # Check if either king was in check at this position
+                # We need to determine who was giving check
+                for player in [Player.RED, Player.BLACK]:
+                    if self.is_king_in_check(player):
+                        potential_checking_player = self.get_opponent(player)
+                        if checking_player is None:
+                            checking_player = potential_checking_player
+                            check_count += 1
+                        elif checking_player == potential_checking_player:
+                            check_count += 1
+                        else:
+                            continuous_check = False
+                            break
+                        break
+                if not continuous_check:
+                    break
+                    
+        # Perpetual check detected if same player was giving check in all repetitions
+        return continuous_check and check_count >= 3 and checking_player is not None, checking_player
+
+    def _detect_perpetual_chase(self, lookback_moves: int = 12) -> Tuple[bool, Optional[Player]]:
+        """
+        Detects perpetual chase patterns according to official Elephant Chess rules.
+        
+        A perpetual chase is when:
+        1. The same position appears 3 times
+        2. One player continuously threatens to capture an unprotected opponent piece
+        3. The chasing player must find a different move or lose
+        
+        Note: Official rules focus on whether the threatened piece is protected,
+        not on piece value comparisons.
+        """
+        if len(self.position_sequence) < 6:
+            return False, None
+            
+        current_pos = self.position_sequence[-1]
+        if self.position_history[current_pos] < 3:
+            return False, None
+            
+        # Find occurrence indices
+        occurrence_indices = []
+        for i, pos in enumerate(self.position_sequence):
+            if pos == current_pos:
+                occurrence_indices.append(i)
+                
+        if len(occurrence_indices) < 3:
+            return False, None
+            
+        # Analyze the moves between repetitions to detect chasing
+        last_three_occurrences = occurrence_indices[-3:]
+        
+        chasing_player = None
+        chased_pieces = set()  # Track which pieces are being chased
+        chase_detected = False
+        
+        # Look at moves between the repetitions
+        for i in range(len(last_three_occurrences) - 1):
+            start_idx = last_three_occurrences[i]
+            end_idx = last_three_occurrences[i + 1]
+            
+            if start_idx >= len(self.move_sequence) or end_idx > len(self.move_sequence):
+                continue
+                
+            # Analyze moves in this segment
+            segment_moves = self.move_sequence[start_idx:end_idx]
+            
+            for move, player in segment_moves:
+                fx, fy, tx, ty = move
+                
+                # Check if this move threatens an opponent piece
+                # Look at all squares this piece can attack after the move
+                piece_moves = self.get_legal_moves_for_piece(tx, ty)
+                
+                for _, _, threat_x, threat_y in piece_moves:
+                    threatened_piece = self.board[threat_y, threat_x]
+                    if (threatened_piece != EMPTY and 
+                        np.sign(threatened_piece) != np.sign(self.board[ty, tx])):
+                        
+                        # Check if this is a valid chase according to official rules
+                        # Official rules focus on whether the piece is protected, not piece values
+                        # A chase occurs when continuously threatening an unprotected piece
+                        if self._is_piece_unprotected(threat_x, threat_y):
+                            if chasing_player is None:
+                                chasing_player = player
+                                chase_detected = True
+                            elif chasing_player != player:
+                                return False, None  # Not consistent chasing
+                            
+                            chased_pieces.add((threat_x, threat_y, threatened_piece))
+        
+        # A chase is detected if there's consistent threatening of the same pieces
+        return chase_detected and len(chased_pieces) > 0 and chasing_player is not None, chasing_player
+
+    def _get_piece_value(self, piece: int) -> int:
+        """Returns the relative value of a piece for chase detection."""
+        abs_piece = abs(piece)
+        values = {
+            R_KING: 1000,    # King is invaluable
+            R_CHARIOT: 9,    # Rook/Chariot
+            R_CANNON: 4.5,   # Cannon  
+            R_HORSE: 4,      # Horse/Knight
+            R_ADVISOR: 2,    # Advisor
+            R_ELEPHANT: 2,   # Elephant
+            R_SOLDIER: 1     # Soldier/Pawn
+        }
+        return values.get(abs_piece, 0)
+
+    def _detect_mutual_perpetual_check(self) -> Tuple[bool, str]:
+        """
+        Detects if both players are giving perpetual check.
+        This results in a draw according to official rules.
+        """
+        red_perpetual, _ = self._detect_perpetual_check()
+        black_perpetual, _ = self._detect_perpetual_check()
+        
+        if red_perpetual and black_perpetual:
+            return True, "mutual_perpetual_check"
+        return False, ""
+
+    def _detect_check_vs_chase(self) -> Tuple[bool, Optional[Player]]:
+        """
+        Detects the special case where one player gives perpetual check
+        while the other gives perpetual chase.
+        According to rules: the chasing player loses.
+        """
+        is_check, checking_player = self._detect_perpetual_check()
+        is_chase, chasing_player = self._detect_perpetual_chase()
+        
+        if is_check and is_chase and checking_player != chasing_player:
+            # The chasing player loses
+            return True, self.get_opponent(chasing_player)
+        return False, None
+
     def check_game_over(self) -> Tuple[Optional[str], Optional[Player]]:
         """
-        Checks if the game has ended due to checkmate or stalemate.
+        Checks if the game has ended due to checkmate, stalemate, or perpetual check/chase.
         Returns a tuple: (status_string or None, winner_player_enum or None).
-        Status can be "checkmate", "stalemate".
+        Status can be "checkmate", "stalemate", "perpetual_check", "perpetual_chase", 
+        "mutual_perpetual_check", "check_vs_chase", "draw_by_repetition".
         Winner is the player who won, or None if draw/ongoing.
         """
+        # Check for mutual perpetual check first (draw)
+        is_mutual_check, status = self._detect_mutual_perpetual_check()
+        if is_mutual_check:
+            return status, None
+            
+        # Check for check vs chase scenario
+        is_check_vs_chase, winner = self._detect_check_vs_chase()
+        if is_check_vs_chase:
+            return "check_vs_chase", winner
+        
+        # Check for perpetual check (checking player loses)
+        is_perpetual_check, checking_player = self._detect_perpetual_check()
+        if is_perpetual_check:
+            # The player giving perpetual check loses
+            return "perpetual_check", self.get_opponent(checking_player)
+        
+        # Check for perpetual chase (chasing player loses)
+        is_perpetual_chase, chasing_player = self._detect_perpetual_chase()
+        if is_perpetual_chase:
+            # The player giving perpetual chase loses
+            return "perpetual_chase", self.get_opponent(chasing_player)
+        
+        # NOTE: Regular threefold repetition is now claim-based, not automatic
+        # Use can_claim_draw_by_repetition() and claim_draw_by_repetition() methods
+        
         player = self.current_player
         legal_moves = self.get_all_legal_moves(player)
 
@@ -535,8 +854,90 @@ class ElephantChessGame:
             else:
                 return "stalemate", None
         
-        # TODO: Add other draw conditions like repetition, insufficient material (less common in Elephant Chess), etc.
         return None, None
+
+    def can_claim_draw_by_repetition(self) -> bool:
+        """
+        Checks if the current player can claim a draw by threefold repetition.
+        This follows traditional chess/Elephant Chess rules where repetition is claim-based.
+        """
+        current_pos_hash = self._get_position_hash()
+        return self.position_history[current_pos_hash] >= 3
+
+    def claim_draw_by_repetition(self) -> bool:
+        """
+        Allows the current player to claim a draw by threefold repetition.
+        Returns True if claim is valid, False otherwise.
+        
+        Note: In tournament play, a valid threefold repetition claim cannot be refused.
+        In casual play, this would typically require opponent agreement, but we 
+        auto-accept valid claims here for simplicity.
+        """
+        return self.can_claim_draw_by_repetition()
+
+    def offer_draw(self) -> str:
+        """
+        Current player offers a draw to opponent.
+        Returns status message indicating the offer was made.
+        The opponent would need to accept/decline in a real game interface.
+        """
+        return f"{self.current_player.name} offers a draw"
+
+    def is_drawn_by_insufficient_material(self) -> bool:
+        """
+        Checks if the game is drawn due to insufficient material.
+        In Elephant Chess, this is rare but can occur with minimal pieces.
+        """
+        pieces = []
+        for y in range(BOARD_HEIGHT):
+            for x in range(BOARD_WIDTH):
+                piece = self.board[y, x]
+                if piece != EMPTY and abs(piece) != R_KING:
+                    pieces.append(abs(piece))
+        
+        # Very basic insufficient material check
+        # (This could be expanded with more sophisticated rules)
+        if len(pieces) == 0:  # Only kings left
+            return True
+        return False
+
+    def get_repetition_count(self) -> int:
+        """Returns the number of times the current position has occurred."""
+        current_pos_hash = self._get_position_hash()
+        return self.position_history[current_pos_hash]
+
+    def _is_piece_unprotected(self, x: int, y: int, board_state: Optional[Board] = None) -> bool:
+        """
+        Checks if a piece at (x,y) is unprotected according to official Elephant Chess rules.
+        A piece is unprotected if no friendly piece can capture an attacker that captures it.
+        """
+        b = board_state if board_state is not None else self.board
+        piece = b[y, x]
+        
+        if piece == EMPTY:
+            return True
+            
+        piece_player = Player.RED if piece > 0 else Player.BLACK
+        
+        # Check if any friendly piece can "see" this square (i.e., can move to defend it)
+        for py in range(BOARD_HEIGHT):
+            for px in range(BOARD_WIDTH):
+                defender_piece = b[py, px]
+                if (defender_piece != EMPTY and 
+                    (Player.RED if defender_piece > 0 else Player.BLACK) == piece_player):
+                    
+                    # Check if this piece can move to defend the target square
+                    # Temporarily set board for move generation
+                    original_board = self.board
+                    self.board = b
+                    defender_moves = self.get_legal_moves_for_piece(px, py)
+                    self.board = original_board
+                    
+                    for _, _, mx, my in defender_moves:
+                        if mx == x and my == y:
+                            return False  # Piece is protected
+                            
+        return True  # No defender found, piece is unprotected
 
 if __name__ == '__main__':
     game = ElephantChessGame()
@@ -565,4 +966,4 @@ if __name__ == '__main__':
     
     custom_fen_black_turn = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR b - - 0 1"
     game_black_turn = ElephantChessGame(fen=custom_fen_black_turn)
-    print(f"Player for FEN with 'b': {game_black_turn.current_player.name}") 
+    print(f"Player for FEN with 'b': {game_black_turn.current_player.name}")

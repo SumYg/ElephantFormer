@@ -97,7 +97,7 @@ uv run python -m elephant_former.evaluation.evaluator --help
 ```
 
 # Plan
-Here's my plan **without an `<end>` token**, focusing on GPT-style modeling of Chinese chess moves as `(from_x, from_y, to_x, to_y)` token sequences:
+Here's my plan **without an `<end>` token**, focusing on GPT-style modeling of Elephant Chess moves as `(from_x, from_y, to_x, to_y)` token sequences:
 
 ---
 
@@ -185,7 +185,7 @@ Here's my plan **without an `<end>` token**, focusing on GPT-style modeling of C
 
 *   **Prediction Accuracy:** All 4 components of the move `(fx, fy, tx, ty)` are correctly predicted for a given step.
 *   **Perplexity:** Can be calculated for each head or as a combined measure.
-*   **Win Rate:** Assess performance by playing against existing Chinese chess agents.
+*   **Win Rate:** Assess performance by playing against existing Elephant Chess agents.
 
 ---
 

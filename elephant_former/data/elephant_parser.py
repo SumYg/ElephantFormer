@@ -1,4 +1,4 @@
-"""Parser for Elephant Chess (Chinese Chess) game records in ICCS format."""
+"""Parser for Elephant Chess game records in ICCS format."""
 
 import re
 from dataclasses import dataclass, field

@@ -152,19 +152,16 @@ class MoveGenerator:
 
         if predicted_move_coords:
             fx, fy, tx, ty = predicted_move_coords
-            # TODO: Convert coords to ICCS-like string for better readability if desired
             print(f"{player_name} (Model) plays: ({fx},{fy}) -> ({tx},{ty})")
             self.game.apply_move(predicted_move_coords)
             
-            # Add move to internal history for next prediction
             move_token_ids = coords_to_unified_token_ids(predicted_move_coords)
             self.current_game_token_history.extend(move_token_ids)
-            # Truncate history
             if len(self.current_game_token_history) > self.max_seq_len:
                 self.current_game_token_history = [START_TOKEN_ID] + \
                                                  self.current_game_token_history[-(self.max_seq_len-1):]
 
-            print(self.game) # Print board after move
+            print(self.game.__str__(last_move=predicted_move_coords)) # Pass the move to __str__
             return self.game.check_game_over()
         else:
             print(f"{player_name} (Model) has no legal moves.")
@@ -190,6 +187,8 @@ class MoveGenerator:
 
         for turn_count in range(max_turns):
             game_over_status, winner = self.play_a_turn()
+
+            input("Press Enter to continue...")
 
             if game_over_status:
                 print(f"\n--- Game Over --- ({game_over_status})")

@@ -1,7 +1,7 @@
 # elephant_former/constants.py
 
 # Board dimensions (0-indexed)
-# Xiangqi board is 9 columns (0-8) by 10 rows (0-9)
+# Elephant Chess board is 9 columns (0-8) by 10 rows (0-9)
 MAX_X = 8  # Max column index
 MAX_Y = 9  # Max row index
 

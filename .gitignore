@@ -161,3 +161,6 @@ cython_debug/
 *.pgns
 /lightning_logs
 /training_checkpoints
+/checkpoints
+/data
+*.png
