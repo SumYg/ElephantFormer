@@ -1,6 +1,48 @@
 # ElephantFormer
 A Transformer-based move prediction model for Elephant Chess.
 
+## Project Structure
+
+The project is organized into the following directories for easy navigation and development:
+
+- **`elephant_former/`** - Core library code
+  - `analysis/` - Game analysis and replay system with move highlighting
+  - `data/` - Data parsing and game format handling
+  - `data_utils/` - Dataset utilities and tokenization
+  - `engine/` - Elephant Chess game engine with perpetual check/chase rules
+  - `evaluation/` - Model evaluation metrics and win rate calculation
+  - `inference/` - Move generation and interactive gameplay
+  - `models/` - Transformer model architecture
+  - `training/` - PyTorch Lightning training modules
+
+- **`docs/`** - Documentation and guides
+  - `PROJECT_STATUS.md` - Comprehensive project status and accomplishments summary
+  - `GAME_ANALYSIS_GUIDE.md` - Complete guide for game analysis features
+  - `MOVE_HIGHLIGHTING_FIX.md` - Technical details on move visualization
+  - `PERPETUAL_RULES_IMPLEMENTATION.md` - Official Elephant Chess rules implementation
+  - `design_notes.md` - Design considerations and architectural decisions
+
+- **`demos/`** - Interactive demonstrations
+  - `quick_replay_demo.py` - Game replay with move highlighting demo
+  - `perpetual_rules_comprehensive_demo.py` - Perpetual check/chase rules demo
+  - `claim_based_repetition_demo.py` - Traditional draw claim system demo
+  - `realistic_draw_scenarios_demo.py` - Strategic draw decision scenarios
+
+- **`tests/`** - Test scripts
+  - `test_move_highlighting.py` - Move visualization feature tests
+  - `test_perpetual_implementation.py` - Perpetual rules implementation tests
+  - `test_corrected_perpetual_rules.py` - Corrected rule validation tests
+
+- **`scripts/`** - Utility scripts
+  - `inspect_sequence_lengths.py` - Dataset sequence length analysis
+
+- **`examples/`** - Example usage scripts
+- **`data/`** - Training datasets and data splits  
+- **`checkpoints/`** - Trained model checkpoints
+- **`notebooks/`** - Jupyter notebooks for analysis
+
+> 💡 **Tip**: Start with the files in `demos/` to see interactive examples of the system's capabilities.
+
 ## Getting Started
 
 ### Running the Example Parser
