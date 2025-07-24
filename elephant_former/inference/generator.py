@@ -289,7 +289,8 @@ class MoveGenerator:
             # input("Press Enter to continue...")
             # print(f"\n--- End of turn {turn_count + 1} ---")
             # exit()
-            # sleep(0.6)
+            print("Sleeping for 0.6 seconds...")
+            sleep(0.6)
 
             if game_over_status:
                 print(f"\n--- Game Over --- ({game_over_status})")
