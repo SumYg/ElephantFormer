@@ -261,7 +261,7 @@ Here's my plan **without an `<end>` token**, focusing on GPT-style modeling of E
 | Optional Board Conditioning              | To Do         |
 
 
-## Current Progress (October 2023 - Evolving)
+## Current Progress (May 2025 - Evolving)
 
 *   **Project Setup**: Initialized project with `uv` and basic structure.
 *   **Constants**: Defined board dimensions, special tokens (`<pad>`, `<start>`, `<unk>`), unified input vocabulary (41 tokens: `fx_0..8`, `fy_0..9`, etc.), and output class counts in `elephant_former/constants.py`.
