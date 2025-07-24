@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Tuple, Dict, Any
 from tqdm import tqdm
 import random # Added for random opponent
+import datetime
 
 from elephant_former.training.lightning_module import LightningElephantFormer
 from elephant_former.data.elephant_parser import ElephantGame, parse_iccs_pgn_file
@@ -38,6 +39,65 @@ class ModelEvaluator:
         except Exception as e:
             print(f"Error loading model from {model_path}: {e}")
             raise
+
+    def _move_to_iccs(self, move: Tuple[int, int, int, int]) -> str:
+        """Convert move tuple (fx, fy, tx, ty) to ICCS notation like 'A0-B1'."""
+        fx, fy, tx, ty = move
+        files = "ABCDEFGHI"
+        from_square = f"{files[fx]}{fy}"
+        to_square = f"{files[tx]}{ty}"
+        return f"{from_square}-{to_square}"
+
+    def _save_game_as_pgn(self, moves: List[Tuple[int, int, int, int]], result: str, 
+                          ai_plays_red: bool, game_num: int, save_dir: str = "evaluation_games") -> str:
+        """Save game moves in PGN format."""
+        # Create directory if it doesn't exist
+        Path(save_dir).mkdir(exist_ok=True)
+        
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        ai_color = "Red" if ai_plays_red else "Black"
+        opponent_color = "Black" if ai_plays_red else "Red"
+        
+        # Determine result and filename based on outcome
+        if result == "1-0":  # Red won
+            if ai_plays_red:
+                outcome = "win"
+            else:
+                outcome = "loss"
+        elif result == "0-1":  # Black won  
+            if ai_plays_red:
+                outcome = "loss"
+            else:
+                outcome = "win"
+        else:  # Draw
+            outcome = "draw"
+            
+        filename = f"{save_dir}/eval_{outcome}_g{game_num:03d}_{timestamp}.pgn"
+        
+        # PGN header
+        pgn_content = f"""[Event "Win Rate Evaluation"]
+[Site "Model Evaluation"]
+[Date "{datetime.datetime.now().strftime('%Y.%m.%d')}"]
+[Round "{game_num}"]
+[{ai_color} "ElephantFormer AI"]
+[{opponent_color} "Random Opponent"]
+[Result "{result}"]
+
+"""
+        
+        # Convert moves to ICCS notation
+        iccs_moves = [self._move_to_iccs(move) for move in moves]
+        move_text = " ".join(iccs_moves)
+        if result:
+            move_text += f" {result}"
+        
+        pgn_content += move_text + "\n"
+        
+        # Save to file
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(pgn_content)
+        
+        return filename
 
     def calculate_prediction_accuracy(self, pgn_file_path: str) -> Dict[str, float]:
         """Calculates the prediction accuracy of the model on a given PGN file.
@@ -306,21 +366,27 @@ class ModelEvaluator:
             
         return best_move
 
-    def calculate_win_rate(self, num_games: int = 10, max_turns_per_game: int = 200, ai_plays_red: bool = True) -> Dict[str, Any]:
+    def calculate_win_rate(self, num_games: int = 10, max_turns_per_game: int = 200, 
+                          ai_plays_red: bool = True, save_games: bool = False) -> Dict[str, Any]:
         """
         Calculates win rate by simulating games against a random opponent.
         The AI will play as Red by default (player making the first move).
+        If save_games is True, saves all games as PGN files.
         """
         print(f"Calculating win rate over {num_games} games against a random opponent...")
         print(f"AI plays as Red: {ai_plays_red}, Max turns per game: {max_turns_per_game}")
+        if save_games:
+            print("Games will be saved as PGN files in evaluation_games/ directory")
 
         wins = 0
         losses = 0
         draws = 0
+        saved_files = []
         
         for i in tqdm(range(num_games), desc="Simulating Games for Win Rate"):
             game = ElephantChessGame() # Resets for each game
             current_game_token_history = [constants.START_TOKEN_ID]
+            game_moves = []  # Track moves for saving
             
             # Determine who is AI based on ai_plays_red for this specific game
             # Note: ElephantChessGame starts with Player.RED
@@ -347,6 +413,8 @@ class ModelEvaluator:
                         game_over_status = "stalemate"
                     break 
 
+                # Track the move
+                game_moves.append(move_to_apply)
                 game.apply_move(move_to_apply)
                 
                 move_token_ids = coords_to_unified_token_ids(move_to_apply)
@@ -364,17 +432,31 @@ class ModelEvaluator:
                     winner = current_winner
                     break
             
+            # Determine game outcome and save if requested
             if game_over_status == "checkmate":
                 if winner == model_player_this_game:
                     wins += 1
+                    pgn_result = "1-0" if ai_plays_red else "0-1"
                 elif winner is not None: # Opponent won
                     losses += 1
+                    pgn_result = "0-1" if ai_plays_red else "1-0"
                 else: # Should not happen if winner is set on checkmate
-                    draws +=1 
+                    draws += 1
+                    pgn_result = "1/2-1/2"
             elif game_over_status == "stalemate":
                 draws += 1
+                pgn_result = "1/2-1/2"
             else: # Max turns reached
                 draws += 1
+                pgn_result = "1/2-1/2"
+            
+            # Save game if requested
+            if save_games and game_moves:
+                try:
+                    filename = self._save_game_as_pgn(game_moves, pgn_result, ai_plays_red, i + 1)
+                    saved_files.append(filename)
+                except Exception as e:
+                    print(f"Error saving game {i+1}: {e}")
         
         total_played = wins + losses + draws
         win_rate = (wins / total_played * 100) if total_played > 0 else 0.0
@@ -391,8 +473,20 @@ class ModelEvaluator:
             "draw_rate_percent": draw_rate,
             "ai_player_color_was_red": ai_plays_red, # Record the configuration for this run
             "opponent_type": "random",
-            "max_turns_per_game": max_turns_per_game
+            "max_turns_per_game": max_turns_per_game,
+            "games_saved": len(saved_files) if save_games else 0,
+            "saved_files": saved_files if save_games else []
         }
+        
+        if save_games and saved_files:
+            print(f"\nSaved {len(saved_files)} games to evaluation_games/ directory:")
+            win_files = [f for f in saved_files if "win" in f]
+            loss_files = [f for f in saved_files if "loss" in f]
+            draw_files = [f for f in saved_files if "draw" in f]
+            print(f"  - {len(win_files)} wins")
+            print(f"  - {len(loss_files)} losses") 
+            print(f"  - {len(draw_files)} draws")
+        
         print(f"Win Rate Calculation Results: {results}")
         return results
 
@@ -406,6 +500,7 @@ if __name__ == '__main__':
     parser.add_argument("--num_win_rate_games", type=int, default=10, help="Number of games to simulate for win rate calculation.")
     parser.add_argument("--max_turns_win_rate", type=int, default=150, help="Max turns per game for win rate calculation.")
     parser.add_argument("--ai_plays_red_win_rate", type=lambda x: (str(x).lower() == 'true'), default=True, help="Set to False if AI should play Black in win rate games (default: True).")
+    parser.add_argument("--save_games", action="store_true", help="Save all evaluation games as PGN files in evaluation_games/ directory.")
 
     cli_args = parser.parse_args()
 
@@ -423,7 +518,8 @@ if __name__ == '__main__':
             results = evaluator.calculate_win_rate(
                 num_games=cli_args.num_win_rate_games,
                 max_turns_per_game=cli_args.max_turns_win_rate,
-                ai_plays_red=cli_args.ai_plays_red_win_rate
+                ai_plays_red=cli_args.ai_plays_red_win_rate,
+                save_games=cli_args.save_games
             )
             print(f"\n--- Win Rate vs Random Opponent ---")
             print(f"AI played Red: {results['ai_player_color_was_red']}")

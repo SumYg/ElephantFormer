@@ -226,7 +226,7 @@ class ElephantChessGame:
             if found_op_king:
                 break
         
-        print(f"Found opponent king: {found_op_king}")
+        # print(f"Found opponent king: {found_op_king}")
         if found_op_king and op_king_x == x: # Kings are on the same file
             intervening_pieces = 0
             min_y, max_y = min(y, op_king_y), max(y, op_king_y)
@@ -559,10 +559,13 @@ class ElephantChessGame:
                 temp_board[ty, tx] = piece_to_move
                 temp_board[fy, fx] = EMPTY
                 
+                # First check: Does this move leave my own king in check?
                 if not self.is_king_in_check(player, temp_board):
-                    legal_moves.append(move_candidate)
+                    # Second check: Does this move allow opponent to deliver checkmate next turn?
+                    if not self._move_allows_opponent_checkmate(move_candidate, player):
+                        legal_moves.append(move_candidate)
         
-        print(f"Legal moves: {legal_moves}")
+        # print(f"Legal moves: {legal_moves}")
         return legal_moves
 
     def apply_move(self, move: Move):
@@ -938,6 +941,115 @@ class ElephantChessGame:
                             return False  # Piece is protected
                             
         return True  # No defender found, piece is unprotected
+    
+    def _move_allows_opponent_checkmate(self, move: Move, player: Player) -> bool:
+        """
+        Optimized check if making this move would allow the opponent to deliver checkmate 
+        on their next turn. This prevents "suicide" moves.
+        
+        Returns True if the move allows opponent checkmate (move should be rejected).
+        Returns False if the move is safe (move can be allowed).
+        """
+        fx, fy, tx, ty = move
+        
+        # Create a temporary board state after applying the move
+        temp_board = self.board.copy()
+        piece_to_move = temp_board[fy, fx]
+        temp_board[ty, tx] = piece_to_move
+        temp_board[fy, fx] = EMPTY
+        
+        opponent = self.get_opponent(player)
+        
+        # Quick optimization: Only check if we're exposing our king to immediate attack
+        my_king_pos = self._find_king(player, temp_board)
+        if not my_king_pos:
+            return False  # No king found (shouldn't happen)
+        
+        king_x, king_y = my_king_pos
+        
+        # Check if opponent can attack our king after this move
+        if not self.is_square_attacked_by(king_x, king_y, opponent, temp_board):
+            return False  # King not under attack, no immediate checkmate possible
+        
+        # King is under attack - now check if we have any legal escape moves
+        # This is where we need to be careful about recursion
+        
+        # Generate our possible response moves without checkmate prevention (to avoid recursion)
+        escape_moves = []
+        
+        for r_idx in range(BOARD_HEIGHT):
+            for c_idx in range(BOARD_WIDTH):
+                piece = temp_board[r_idx, c_idx]
+                if piece != EMPTY and (Player.RED if piece > 0 else Player.BLACK) == player:
+                    # Get moves for this piece
+                    piece_moves = self._get_piece_moves_on_board(c_idx, r_idx, player, temp_board)
+                    
+                    # Check if any of these moves get us out of check
+                    for escape_move in piece_moves:
+                        escape_fx, escape_fy, escape_tx, escape_ty = escape_move
+                        
+                        # Apply escape move
+                        escape_board = temp_board.copy()
+                        escape_piece = escape_board[escape_fy, escape_fx]
+                        escape_board[escape_ty, escape_tx] = escape_piece
+                        escape_board[escape_fy, escape_fx] = EMPTY
+                        
+                        # Check if this gets our king out of check
+                        if not self.is_king_in_check(player, escape_board):
+                            return False  # We found an escape move, not checkmate
+        
+        # No escape moves found while king is in check = checkmate
+        return True
+    
+    def _get_piece_moves_on_board(self, x: int, y: int, player: Player, board_state: Board) -> List[Move]:
+        """Get legal moves for a piece on a specific board state (used for optimization)."""
+        # Temporarily set the board to get piece moves
+        original_board = self.board
+        try:
+            self.board = board_state
+            moves = self.get_legal_moves_for_piece(x, y)
+            return moves
+        finally:
+            self.board = original_board
+    
+    def get_all_legal_moves_basic(self, player: Player) -> List[Move]:
+        """
+        Basic legal move generation without checkmate prevention (to avoid recursion).
+        Only filters moves that leave own king in check.
+        """
+        legal_moves: List[Move] = []
+        current_player_pieces = []
+
+        for r_idx in range(BOARD_HEIGHT):
+            for c_idx in range(BOARD_WIDTH):
+                piece = self.board[r_idx,c_idx]
+                if piece != EMPTY and (Player.RED if piece > 0 else Player.BLACK) == player:
+                    current_player_pieces.append((c_idx,r_idx)) 
+
+        for x, y in current_player_pieces:
+            pseudo_legal_moves = self.get_legal_moves_for_piece(x, y)
+            
+            for move_candidate in pseudo_legal_moves:
+                fx, fy, tx, ty = move_candidate
+                
+                temp_board = self.board.copy()
+                
+                piece_to_move = temp_board[fy, fx]
+                temp_board[ty, tx] = piece_to_move
+                temp_board[fy, fx] = EMPTY
+                
+                # Only check if move leaves own king in check (no recursion)
+                if not self.is_king_in_check(player, temp_board):
+                    legal_moves.append(move_candidate)
+        
+        return legal_moves
+    
+    def get_fen(self) -> str:
+        """
+        Returns a simple position string for game analysis.
+        This is a simplified representation for debugging purposes.
+        """
+        return f"board_{hash(str(self.board.tobytes()))}_{self.current_player.name}_{len(self.move_history)}"
 
 if __name__ == '__main__':
     game = ElephantChessGame()

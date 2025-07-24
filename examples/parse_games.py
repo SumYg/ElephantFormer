@@ -3,8 +3,18 @@
 from elephant_former.data.elephant_parser import parse_iccs_pgn_file, format_moves
 
 def main():
-    # Parse the games file (in ICCS format)
-    games = parse_iccs_pgn_file('data/WXF-41743games.pgns')
+    import sys
+    
+    # Get file path from command line or use default
+    if len(sys.argv) > 1:
+        pgn_file = sys.argv[1]
+    else:
+        pgn_file = 'data/WXF-41743games.pgns'
+    
+    print(f"Parsing file: {pgn_file}")
+    
+    # Parse the games file (in ICCS format)  
+    games = parse_iccs_pgn_file(pgn_file)
     
     # Print details of the first game
     if games:
@@ -13,7 +23,7 @@ def main():
         print(f"Red Player: {game.red_player}")
         print(f"Black Player: {game.black_player}")
         print(f"Result: {game.result}")
-        print(f"Number of moves: {len(game.moves)}")
+        print(f"Number of moves: {len(game.parsed_moves)}")
         print(f"Move format: {game.move_format}")
         
         # Print first 10 moves
