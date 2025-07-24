@@ -1,48 +1,6 @@
 # ElephantFormer
 A Transformer-based move prediction model for Elephant Chess.
 
-## Project Structure
-
-The project is organized into the following directories for easy navigation and development:
-
-- **`elephant_former/`** - Core library code
-  - `analysis/` - Game analysis and replay system with move highlighting
-  - `data/` - Data parsing and game format handling
-  - `data_utils/` - Dataset utilities and tokenization
-  - `engine/` - Elephant Chess game engine with perpetual check/chase rules
-  - `evaluation/` - Model evaluation metrics and win rate calculation
-  - `inference/` - Move generation and interactive gameplay
-  - `models/` - Transformer model architecture
-  - `training/` - PyTorch Lightning training modules
-
-- **`docs/`** - Documentation and guides
-  - `PROJECT_STATUS.md` - Comprehensive project status and accomplishments summary
-  - `GAME_ANALYSIS_GUIDE.md` - Complete guide for game analysis features
-  - `MOVE_HIGHLIGHTING_FIX.md` - Technical details on move visualization
-  - `PERPETUAL_RULES_IMPLEMENTATION.md` - Official Elephant Chess rules implementation
-  - `design_notes.md` - Design considerations and architectural decisions
-
-- **`demos/`** - Interactive demonstrations
-  - `quick_replay_demo.py` - Game replay with move highlighting demo
-  - `perpetual_rules_comprehensive_demo.py` - Perpetual check/chase rules demo
-  - `claim_based_repetition_demo.py` - Traditional draw claim system demo
-  - `realistic_draw_scenarios_demo.py` - Strategic draw decision scenarios
-
-- **`tests/`** - Test scripts
-  - `test_move_highlighting.py` - Move visualization feature tests
-  - `test_perpetual_implementation.py` - Perpetual rules implementation tests
-  - `test_corrected_perpetual_rules.py` - Corrected rule validation tests
-
-- **`scripts/`** - Utility scripts
-  - `inspect_sequence_lengths.py` - Dataset sequence length analysis
-
-- **`examples/`** - Example usage scripts
-- **`data/`** - Training datasets and data splits  
-- **`checkpoints/`** - Trained model checkpoints
-- **`notebooks/`** - Jupyter notebooks for analysis
-
-> 💡 **Tip**: Start with the files in `demos/` to see interactive examples of the system's capabilities.
-
 ## Getting Started
 
 ### Running the Example Parser
@@ -103,7 +61,14 @@ uv run python train.py --help
 
 After training a model and having a checkpoint file, you can run the move generator to see the AI play moves in the console.
 
-Example:
+**Using the current best model:**
+```bash
+uv run python -m elephant_former.inference.generator \
+    --model_checkpoint_path checkpoints/trial-2-resume-1/elephant_former-epoch=22-val_loss=6.36.ckpt \
+    --device cpu
+```
+
+**Using your own trained model:**
 ```bash
 uv run python -m elephant_former.inference.generator \
     --model_checkpoint_path checkpoints/your_trial_dir/your_model.ckpt \
@@ -146,6 +111,60 @@ For a full list of evaluation options:
 ```bash
 uv run python -m elephant_former.evaluation.evaluator --help
 ```
+
+## Project Structure
+
+```
+ElephantFormer/
+├── train.py                     # Main training script
+├── elephant_former/             # Core package
+│   ├── constants.py            # Vocabulary, board dimensions, tokens
+│   ├── data/                   # Data processing
+│   │   ├── elephant_parser.py  # PGN parsing utilities
+│   │   └── __init__.py
+│   ├── data_utils/             # Dataset and tokenization
+│   │   ├── dataset.py          # PyTorch Dataset implementation
+│   │   ├── tokenization_utils.py # Move tokenization
+│   │   └── repetition_checker.py # Game repetition detection
+│   ├── models/                 # Model architecture
+│   │   └── transformer_model.py # ElephantFormerGPT implementation
+│   ├── training/               # Training components
+│   │   └── lightning_module.py # PyTorch Lightning wrapper
+│   ├── inference/              # Move generation
+│   │   └── generator.py        # Interactive gameplay
+│   ├── evaluation/             # Performance metrics
+│   │   └── evaluator.py        # Accuracy, perplexity, win rate
+│   ├── engine/                 # Game logic
+│   │   └── elephant_chess_game.py # Complete rule implementation
+│   └── analysis/               # Game analysis tools
+│       └── game_playback.py    # Replay and visualization
+├── data/                       # Training datasets
+│   ├── sample_games.pgn        # Sample dataset for testing
+│   ├── real/                   # Production train/val/test splits
+│   └── splits*/                # Various data split configurations
+├── checkpoints/                # Saved model checkpoints
+│   └── trial-*/                # Training trial directories
+├── demos/                      # Interactive demonstrations
+│   ├── quick_replay_demo.py    # Game replay with highlighting
+│   └── perpetual_*.py          # Rule enforcement demos
+├── examples/                   # Usage examples
+│   └── parse_games.py          # PGN parsing demonstration
+├── tests/                      # Test files
+│   └── test_*.py              # Component tests
+├── docs/                       # Documentation
+│   └── *.md                   # Design notes and guides
+└── scripts/                    # Utility scripts
+    └── inspect_sequence_lengths.py # Dataset analysis
+```
+
+### Key Components
+
+- **Data Pipeline**: PGN parsing → ICCS moves → tokenized sequences → PyTorch Dataset
+- **Model Architecture**: GPT-style transformer with 4 output heads for coordinate prediction
+- **Training**: PyTorch Lightning with checkpointing, early stopping, and validation
+- **Game Engine**: Complete Elephant Chess rules with legal move validation
+- **Inference**: Interactive move generation with legal filtering
+- **Evaluation**: Comprehensive metrics (accuracy, perplexity, win rate)
 
 # Plan
 Here's my plan **without an `<end>` token**, focusing on GPT-style modeling of Elephant Chess moves as `(from_x, from_y, to_x, to_y)` token sequences:
@@ -256,7 +275,7 @@ Here's my plan **without an `<end>` token**, focusing on GPT-style modeling of E
 | Dataset Preparation                      | Done          |
 | GPT Model Architecture                   | Done          |
 | Training Loop                            | Done          |
-| Move Generation Logic (incl. Game Logic) | In Progress   |
+| Move Generation Logic (incl. Game Logic) | Done          |
 | Evaluation Metrics                       | Done          |
 | Optional Board Conditioning              | To Do         |
 
@@ -330,5 +349,17 @@ Here's my plan **without an `<end>` token**, focusing on GPT-style modeling of E
 **Next Steps (High-Level from Plan):**
 *   Refine and test Move Generation/Inference thoroughly.
 *   Consider Board State Conditioning (Step 7).
+
+## TODO
+
+### 🎯 Model Development
+- [ ] **Benchmark against Pikafish**: Evaluate ElephantFormer's performance against the state-of-the-art Pikafish engine to establish competitive baseline metrics
+- [ ] **PPO Integration**: Explore the effectiveness and potential of using Proximal Policy Optimization (PPO) in offline reinforcement learning settings for strategic improvement
+
+### 📱 Cross-Platform Deployment
+- [ ] **Mobile Application**: Deploy the trained model on iOS/Android platforms for portable xiangqi gameplay
+- [ ] **Web Interface**: Create a browser-based implementation for accessible online play
+- [ ] **Model Optimization**: Optimize model size and inference speed for resource-constrained environments
+- [ ] **Real-time Performance**: Ensure smooth gameplay experience across different devices and platforms
 
 
