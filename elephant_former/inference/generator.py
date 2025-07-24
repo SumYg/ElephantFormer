@@ -7,6 +7,13 @@ import random
 import argparse # For command-line arguments
 from typing import List, Tuple, Optional
 from pathlib import Path
+import os
+import sys
+from rich.live import Live
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
+from rich.layout import Layout
 
 from elephant_former.engine.elephant_chess_game import ElephantChessGame, Move, Player, PIECE_NAMES
 from elephant_former.training.lightning_module import LightningElephantFormer # To load the model
@@ -15,7 +22,7 @@ from elephant_former.data_utils.tokenization_utils import coords_to_unified_toke
 from elephant_former.constants import START_TOKEN_ID, PAD_TOKEN_ID # Corrected path
 
 class MoveGenerator:
-    def __init__(self, model_checkpoint_path: str, device: str = 'cpu', initial_fen: Optional[str] = None):
+    def __init__(self, model_checkpoint_path: str, device: str = 'cpu', initial_fen: Optional[str] = None, update_display: bool = False):
         self.game = ElephantChessGame(fen=initial_fen)
         self.model_checkpoint_path = model_checkpoint_path
         self.device = torch.device(device)
@@ -23,6 +30,9 @@ class MoveGenerator:
         self.model: Optional[LightningElephantFormer] = None
         self.max_seq_len = 0 # Initialize, will be set from loaded model
         self.current_game_token_history: List[int] = [START_TOKEN_ID]
+        self.update_display = update_display  # New option for updating display
+        self.console = Console()  # Rich console
+        self.live_display: Optional[Live] = None  # Rich Live display
 
         if model_checkpoint_path:
             if not Path(model_checkpoint_path).exists():
@@ -53,6 +63,99 @@ class MoveGenerator:
         """Resets the game to the initial state or a given FEN."""
         self.game = ElephantChessGame(fen=fen)
         print("Game reset.")
+    
+    def create_display_content(self, last_move: Optional[Move] = None, game_info: str = "", initial_info: str = ""):
+        """Create the display content using Rich formatting."""
+        try:
+            # Use colored board if terminal supports it, otherwise fallback to plain text
+            if self.console.color_system:
+                board_content_raw = self.game.get_rich_board(last_move=last_move)
+            else:
+                board_content_raw = Text(self.game.__str__(last_move=last_move))
+            
+            layout = Layout()
+            
+            if initial_info and self.update_display:
+                # Create header panel with initial info
+                header = Panel(
+                    initial_info,
+                    title="Game Info",
+                    border_style="blue"
+                )
+                
+                # Create board panel - combine game_info with board content
+                if game_info:
+                    board_content = Text()
+                    board_content.append(f"{game_info}\n")
+                    board_content.append(board_content_raw)
+                else:
+                    board_content = board_content_raw
+                board = Panel(
+                    board_content,
+                    title="Elephant Chess Board",
+                    border_style="green"
+                )
+                
+                layout.split_column(
+                    Layout(header, size=6),
+                    Layout(board)
+                )
+            else:
+                # Just show the board with optional move info
+                if game_info:
+                    board_content = Text()
+                    board_content.append(f"{game_info}\n")
+                    board_content.append(board_content_raw)
+                else:
+                    board_content = board_content_raw
+                layout = Panel(
+                    board_content,
+                    title="Elephant Chess Board",
+                    border_style="green"
+                )
+            
+            return layout
+            
+        except UnicodeEncodeError:
+            error_msg = f"Board updated (move: {last_move}). Unicode display not supported in this terminal."
+            if game_info:
+                error_msg = f"{game_info}\n{error_msg}"
+            return Panel(error_msg, title="Board Display", border_style="red")
+
+    def display_board(self, last_move: Optional[Move] = None, game_info: str = "", initial_info: str = ""):
+        """Display the board using either Rich Live updating or traditional scrolling mode."""
+        if self.update_display:
+            # Use Rich Live display for smooth updates
+            content = self.create_display_content(last_move, game_info, initial_info)
+            if self.live_display:
+                self.live_display.update(content)
+            else:
+                # First time - create the live display
+                self.live_display = Live(content, console=self.console, refresh_per_second=4)
+                self.live_display.start()
+        else:
+            # Traditional scrolling display with colors (fallback to plain text if needed)
+            try:
+                if self.console.color_system:
+                    board_display = self.game.get_rich_board(last_move=last_move)
+                    if initial_info:
+                        print(initial_info)
+                    if game_info:
+                        print(game_info)
+                    self.console.print(board_display)
+                else:
+                    # Fallback to plain text for terminals without color support
+                    board_str = self.game.__str__(last_move=last_move)
+                    if initial_info:
+                        print(initial_info)
+                    if game_info:
+                        print(game_info)
+                    print(board_str)
+            except UnicodeEncodeError:
+                error_msg = f"Board updated (move: {last_move}). Unicode display not supported in this terminal."
+                if game_info:
+                    error_msg = f"{game_info}\n{error_msg}"
+                print(error_msg)
 
     def _filter_perpetual_chase_moves(self, legal_moves: List[Move]) -> List[Move]:
         """Filter out moves that would lead to immediate perpetual chase loss based on history."""
@@ -69,7 +172,7 @@ class MoveGenerator:
                 continue
             filtered_moves.append(move)
         
-        if blocked_moves:
+        if blocked_moves and not self.update_display:
             print(f"Blocked {len(blocked_moves)} potential chase moves: {blocked_moves}")
         
         return filtered_moves
@@ -238,13 +341,19 @@ class MoveGenerator:
         current_player_enum = self.game.get_current_player()
         player_name = current_player_enum.name
 
-        print(f"\n--- {player_name}'s turn ({self.game.fullmove_number}{'.' if player_name == Player.RED.name else '...'}) ---")
+        # Show turn info only in scrolling mode
+        if not self.update_display:
+            print(f"\n--- {player_name}'s turn ({self.game.fullmove_number}{'.' if player_name == Player.RED.name else '...'}) ---")
 
         predicted_move_coords = self.get_model_predicted_move(self.game.get_all_legal_moves(current_player_enum))
 
         if predicted_move_coords:
             fx, fy, tx, ty = predicted_move_coords
-            print(f"{player_name} (Model) plays: ({fx},{fy}) -> ({tx},{ty})")
+            
+            # Show move details only in scrolling mode
+            if not self.update_display:
+                print(f"{player_name} (Model) plays: ({fx},{fy}) -> ({tx},{ty})")
+                
             self.game.apply_move(predicted_move_coords)
             
             move_token_ids = coords_to_unified_token_ids(predicted_move_coords)
@@ -253,35 +362,31 @@ class MoveGenerator:
                 self.current_game_token_history = [START_TOKEN_ID] + \
                                                  self.current_game_token_history[-(self.max_seq_len-1):]
 
-            try:
-                print(self.game.__str__(last_move=predicted_move_coords)) # Pass the move to __str__
-            except UnicodeEncodeError:
-                print(f"Board updated (move: {predicted_move_coords}). Unicode display not supported in this terminal.")
+            # Display the updated board with comprehensive info
+            current_player_name = "Red" if current_player_enum == Player.RED else "Black"
+            move_info = f"Move {self.game.fullmove_number}{'.' if player_name == Player.RED.name else '...'}: {current_player_name} played ({fx},{fy}) → ({tx},{ty})"
+            self.display_board(last_move=predicted_move_coords, game_info=move_info)
             return self.game.check_game_over()
         else:
-            print(f"{player_name} (Model) has no legal moves.")
-            # Check if it's checkmate or stalemate
+            # Game ending scenarios
+            end_message = f"{player_name} (Model) has no legal moves."
             if self.game.is_king_in_check(current_player_enum):
                 opponent = self.game.get_opponent(current_player_enum)
-                print(f"Checkmate! {opponent.name} wins.")
-                return "checkmate", opponent
+                end_message += f"\nCheckmate! {opponent.name} wins."
+                game_result = ("checkmate", opponent)
             else:
-                print("Stalemate! It's a draw.")
-                return "stalemate", None
+                end_message += "\nStalemate! It's a draw."
+                game_result = ("stalemate", None)
+            
+            # Display final board state with game over info
+            self.display_board(game_info=end_message)
+            return game_result
 
     def run_game_loop(self, max_turns: int = 100):
         """Runs the main game loop until game over or max_turns is reached."""
-        print("Starting new game...")
-        print(f"Model: {self.model_checkpoint_path}")
-        print(f"Device: {self.device}")
-        print(f"Max sequence length: {self.max_seq_len}")
-        print(f"Initial FEN: {self.current_fen if self.current_fen else 'Default starting position'}")
-        print(f"Max turns: {max_turns}")
-        print("Initial board state:")
-        try:
-            print(self.game) # Print initial board
-        except UnicodeEncodeError:
-            print("Initial board loaded. Unicode display not supported in this terminal.")
+        # Display initial board with game info
+        init_info = f"Starting new game...\nModel: {Path(self.model_checkpoint_path).name if self.model_checkpoint_path else 'Random moves'}\nDevice: {self.device}\nMax turns: {max_turns}\nDisplay mode: {'Updating' if self.update_display else 'Scrolling'}"
+        self.display_board(initial_info=init_info)
 
         for turn_count in range(max_turns):
             game_over_status, winner = self.play_a_turn()
@@ -289,10 +394,13 @@ class MoveGenerator:
             # input("Press Enter to continue...")
             # print(f"\n--- End of turn {turn_count + 1} ---")
             # exit()
-            print("Sleeping for 0.6 seconds...")
+            if not self.update_display:
+                print("Sleeping for 0.6 seconds...")
             sleep(0.6)
 
             if game_over_status:
+                if self.live_display:
+                    self.live_display.stop()
                 print(f"\n--- Game Over --- ({game_over_status})")
                 if winner:
                     print(f"Winner: {winner.name}")
@@ -301,6 +409,8 @@ class MoveGenerator:
                 break
             
             if turn_count == max_turns - 1:
+                if self.live_display:
+                    self.live_display.stop()
                 print("\n--- Game Over ---")
                 print(f"Maximum turns ({max_turns}) reached. Game is a draw.")
                 break
@@ -311,6 +421,7 @@ if __name__ == '__main__':
     cli_parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda", "mps"], help="Device to use (cpu, cuda, mps)")
     cli_parser.add_argument("--max_turns", type=int, default=100, help="Maximum number of turns for the game.")
     cli_parser.add_argument("--fen", type=str, default=None, help="Initial FEN string to start the game from. Uses default start if not provided.")
+    cli_parser.add_argument("--update-display", action="store_true", help="Use updating display mode (board updates in place) instead of scrolling mode.")
     
     cli_args = cli_parser.parse_args()
 
@@ -318,7 +429,8 @@ if __name__ == '__main__':
         generator = MoveGenerator(
             model_checkpoint_path=cli_args.model_checkpoint_path, 
             device=cli_args.device, 
-            initial_fen=cli_args.fen # FEN is passed here
+            initial_fen=cli_args.fen, # FEN is passed here
+            update_display=cli_args.update_display
         )
         # The FEN is handled by the constructor. If cli_args.fen is None, MoveGenerator uses default.
         # If a FEN is provided, it's used to initialize self.game.

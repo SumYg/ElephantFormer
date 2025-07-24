@@ -4,6 +4,7 @@ import numpy as np
 from typing import Tuple, List, Optional, Dict
 from enum import Enum
 from collections import Counter, defaultdict
+from rich.text import Text
 
 # --- Constants ---
 
@@ -48,11 +49,25 @@ PIECE_NAMES = {
 }
 
 # Dictionary for a clear, unambiguous character representation of pieces.
-# Using Chinese characters for authentic representation.
+# Using Chinese characters for authentic representation with colors.
 PIECE_CHARS = {
-    EMPTY: "．", # Full-width dot for spacing
-    R_KING: "帥", R_ADVISOR: "仕", R_ELEPHANT: "相", R_HORSE: "傌", R_CHARIOT: "俥", R_CANNON: "炮", R_SOLDIER: "兵",
-    B_KING: "將", B_ADVISOR: "士", B_ELEPHANT: "象", B_HORSE: "馬", B_CHARIOT: "車", B_CANNON: "砲", B_SOLDIER: "卒",
+    EMPTY: Text("．", style="dim"),  # Full-width dot for spacing
+    # Red pieces - styled in red/bright colors
+    R_KING: Text("帥", style="red bold"), 
+    R_ADVISOR: Text("仕", style="red"), 
+    R_ELEPHANT: Text("相", style="red"), 
+    R_HORSE: Text("傌", style="red"), 
+    R_CHARIOT: Text("俥", style="red"), 
+    R_CANNON: Text("炮", style="red"), 
+    R_SOLDIER: Text("兵", style="red"),
+    # Black pieces - styled in black/dark colors
+    B_KING: Text("將", style="black bold"), 
+    B_ADVISOR: Text("士", style="black"), 
+    B_ELEPHANT: Text("象", style="black"), 
+    B_HORSE: Text("馬", style="black"), 
+    B_CHARIOT: Text("車", style="black"), 
+    B_CANNON: Text("砲", style="black"), 
+    B_SOLDIER: Text("卒", style="black"),
 }
 
 INITIAL_BOARD_FEN = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1" # Standard FEN for Elephant Chess
@@ -151,11 +166,62 @@ class ElephantChessGame:
             return None
         return self.board[y, x]
 
+    def get_rich_board(self, last_move: Optional[Move] = None) -> Text:
+        """
+        Returns a Rich Text object representation of the board with colors.
+        Optionally highlights the last move made.
+        """
+        result = Text()
+        result.append("  +------------------+\n")
+        fx, fy, tx, ty = (-1,-1,-1,-1)
+        if last_move:
+            fx, fy, tx, ty = last_move
+
+        for y_idx in range(BOARD_HEIGHT -1, -1, -1):
+            result.append(f"{y_idx} |")
+            for x_idx in range(BOARD_WIDTH):
+                piece = self.board[y_idx, x_idx]
+                char_repr = PIECE_CHARS.get(piece, Text('?'))
+                
+                # Highlight the 'to' square of the last move
+                if x_idx == tx and y_idx == ty:
+                    # Use background color to highlight the destination (no * marker needed)
+                    result.append(" ")
+                    if isinstance(char_repr, Text):
+                        highlighted = Text(char_repr.plain, style=f"{char_repr.style} on yellow")
+                        result.append(highlighted)
+                    else:
+                        result.append(Text(str(char_repr), style="on yellow"))
+                    continue
+
+                # The 'from' square will now be empty. We can mark it.
+                if x_idx == fx and y_idx == fy:
+                    # Use green background to show where the piece came from (no + marker needed)
+                    result.append(" ", style="on green")
+                    result.append("．", style="on green")  # Empty square with green background
+                    continue
+                
+                result.append(" ")
+                if isinstance(char_repr, Text):
+                    result.append(char_repr)
+                else:
+                    result.append(str(char_repr))
+            result.append(" |\n")
+        result.append("  +------------------+\n")
+        result.append("    0 1 2 3 4 5 6 7 8 (x)\n")
+        result.append(f"Current player: ")
+        # Use red color for RED player, black color for BLACK player
+        player_color = "red bold" if self.current_player == Player.RED else "black bold"
+        result.append(self.current_player.name, style=player_color)
+        result.append("\n")
+        return result
+
     def __str__(self, last_move: Optional[Move] = None) -> str:
         """
         String representation of the board for printing.
         Optionally highlights the last move made.
         """
+        # For backward compatibility, return plain text version
         s = "  +------------------+\n"
         fx, fy, tx, ty = (-1,-1,-1,-1)
         if last_move:
@@ -165,21 +231,20 @@ class ElephantChessGame:
             s += f"{y_idx} |"
             for x_idx in range(BOARD_WIDTH):
                 piece = self.board[y_idx, x_idx]
-                char_repr = PIECE_CHARS.get(piece, '?')
+                char_repr = PIECE_CHARS.get(piece, Text('?'))
+                char_plain = char_repr.plain if isinstance(char_repr, Text) else str(char_repr)
                 
                 # Highlight the 'to' square of the last move
                 if x_idx == tx and y_idx == ty:
-                    # Use a different character or color to highlight the destination
-                    s += f"*{char_repr}"
+                    s += f"*{char_plain}"
                     continue
 
                 # The 'from' square will now be empty. We can mark it.
                 if x_idx == fx and y_idx == fy:
-                    # Use a different character to show where the piece came from
                     s += " +"
                     continue
                 
-                s += f" {char_repr}"
+                s += f" {char_plain}"
             s += " |\n"
         s += "  +------------------+\n"
         s += "    0 1 2 3 4 5 6 7 8 (x)\n"
