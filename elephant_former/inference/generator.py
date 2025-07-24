@@ -1,5 +1,6 @@
 # elephant_former/inference/generator.py
 
+from time import sleep
 import torch
 import torch.nn.functional as F # For log_softmax
 import random
@@ -53,13 +54,104 @@ class MoveGenerator:
         self.game = ElephantChessGame(fen=fen)
         print("Game reset.")
 
+    def _filter_perpetual_chase_moves(self, legal_moves: List[Move]) -> List[Move]:
+        """Filter out moves that would lead to immediate perpetual chase loss based on history."""
+        if len(self.game.move_sequence) < 8:  # Need some history to detect patterns
+            return legal_moves
+            
+        filtered_moves = []
+        current_player = self.game.get_current_player()
+        blocked_moves = []
+        
+        for move in legal_moves:
+            if self._would_move_complete_losing_pattern(move, current_player):
+                blocked_moves.append(move)
+                continue
+            filtered_moves.append(move)
+        
+        if blocked_moves:
+            print(f"Blocked {len(blocked_moves)} potential chase moves: {blocked_moves}")
+        
+        return filtered_moves
+    
+    def _would_move_complete_losing_pattern(self, move: Move, current_player: Player) -> bool:
+        """Check if this move would complete a pattern that leads to perpetual chase loss."""
+        if len(self.game.move_sequence) < 8:
+            return False
+            
+        # Get recent move history
+        recent_moves = self.game.move_sequence[-12:]
+        our_moves = [mv for mv, player in recent_moves if player == current_player]
+        opponent_moves = [mv for mv, player in recent_moves if player != current_player]
+        
+        if len(our_moves) < 3:
+            return False
+            
+        # Check if we're in a chasing pattern by analyzing move relationships
+        future_our_moves = our_moves + [move]
+        
+        # 1. Check for simple repetition (same move 3+ times)
+        move_counts = {}
+        for mv in future_our_moves:
+            move_counts[mv] = move_counts.get(mv, 0) + 1
+        if max(move_counts.values()) >= 3:
+            return True
+            
+        # 2. Check for position repetition (returning to same squares) - be more strict
+        positions_visited = {}
+        for mv in future_our_moves:
+            to_pos = (mv[2], mv[3])  # (to_x, to_y)
+            positions_visited[to_pos] = positions_visited.get(to_pos, 0) + 1
+        if max(positions_visited.values()) >= 2:  # Changed from 3 to 2 - stricter
+            return True
+            
+        # 3. Check if we're following/chasing opponent's piece
+        if len(opponent_moves) >= 2:
+            # See if our moves are consistently targeting where opponent moved
+            chase_count = 0
+            for i, our_mv in enumerate(future_our_moves[-4:]):  # Last 4 of our moves
+                our_to = (our_mv[2], our_mv[3])
+                # Check if we're moving to where opponent was recently
+                for opp_mv in opponent_moves[-4:]:
+                    opp_from = (opp_mv[0], opp_mv[1])
+                    opp_to = (opp_mv[2], opp_mv[3])
+                    if our_to == opp_from or our_to == opp_to:
+                        chase_count += 1
+                        break
+            
+            # If 2+ of our recent moves target opponent's positions, it's likely chase
+            if chase_count >= 2:  # Changed from 3 to 2 - stricter
+                return True
+                
+        # 4. Check for back-and-forth pattern between limited positions
+        if len(future_our_moves) >= 4:
+            last_4_positions = [(mv[2], mv[3]) for mv in future_our_moves[-4:]]
+            unique_positions = set(last_4_positions)
+            if len(unique_positions) <= 2:  # Only 2 positions in last 4 moves
+                return True
+        
+        # 5. Check for any position being visited twice in recent history (very strict)
+        if len(future_our_moves) >= 6:
+            last_6_positions = [(mv[2], mv[3]) for mv in future_our_moves[-6:]]
+            if len(set(last_6_positions)) < len(last_6_positions):  # Any repetition
+                return True
+                
+        return False
+
     def get_model_predicted_move(self, legal_moves: List[Move]) -> Optional[Move]:
         if not legal_moves:
             return None
 
+        # Filter out moves that would lead to perpetual chase (player loses)
+        filtered_moves = self._filter_perpetual_chase_moves(legal_moves)
+        if not filtered_moves:
+            # If all moves lead to perpetual chase, use original legal moves
+            filtered_moves = legal_moves
+            print("Warning: All moves lead to perpetual chase, proceeding with original legal moves.")
+
         if not self.model or not self.max_seq_len:
             print("No model loaded or max_seq_len not set, selecting random move.")
-            return random.choice(legal_moves)
+            return random.choice(filtered_moves)
 
         # 1. Prepare input sequence
         unpadded_sequence = [START_TOKEN_ID]
@@ -105,11 +197,11 @@ class MoveGenerator:
         pred_logits_tx = logits_tx[0, last_actual_token_idx, :] 
         pred_logits_ty = logits_ty[0, last_actual_token_idx, :] 
 
-        # 4. Score legal moves
+        # 4. Score legal moves (use filtered moves)
         best_move = None
         max_score = -float('inf')
 
-        for move_coords in legal_moves:
+        for move_coords in filtered_moves:
             m_fx, m_fy, m_tx, m_ty = move_coords
             
             # Ensure indices are within bounds for the specific head's logits
@@ -132,9 +224,9 @@ class MoveGenerator:
                 max_score = current_score.item()
                 best_move = move_coords
         
-        if best_move is None and legal_moves: # If all scores were -inf or no valid scores
-            print("Warning: Could not determine best move from model, picking random among legal.")
-            return random.choice(legal_moves)
+        if best_move is None and filtered_moves: # If all scores were -inf or no valid scores
+            print("Warning: Could not determine best move from model, picking random among filtered.")
+            return random.choice(filtered_moves)
             
         return best_move
 
@@ -161,7 +253,10 @@ class MoveGenerator:
                 self.current_game_token_history = [START_TOKEN_ID] + \
                                                  self.current_game_token_history[-(self.max_seq_len-1):]
 
-            print(self.game.__str__(last_move=predicted_move_coords)) # Pass the move to __str__
+            try:
+                print(self.game.__str__(last_move=predicted_move_coords)) # Pass the move to __str__
+            except UnicodeEncodeError:
+                print(f"Board updated (move: {predicted_move_coords}). Unicode display not supported in this terminal.")
             return self.game.check_game_over()
         else:
             print(f"{player_name} (Model) has no legal moves.")
@@ -183,12 +278,18 @@ class MoveGenerator:
         print(f"Initial FEN: {self.current_fen if self.current_fen else 'Default starting position'}")
         print(f"Max turns: {max_turns}")
         print("Initial board state:")
-        print(self.game) # Print initial board
+        try:
+            print(self.game) # Print initial board
+        except UnicodeEncodeError:
+            print("Initial board loaded. Unicode display not supported in this terminal.")
 
         for turn_count in range(max_turns):
             game_over_status, winner = self.play_a_turn()
 
-            input("Press Enter to continue...")
+            # input("Press Enter to continue...")
+            # print(f"\n--- End of turn {turn_count + 1} ---")
+            # exit()
+            # sleep(0.6)
 
             if game_over_status:
                 print(f"\n--- Game Over --- ({game_over_status})")

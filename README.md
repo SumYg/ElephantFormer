@@ -101,7 +101,7 @@ uv run python train.py --help
 
 ### Running Inference (Move Generation)
 
-After training a model and having a checkpoint file (e.g., `last.ckpt` or `best.ckpt`), you can run the move generator to see the AI play moves in the console. 
+After training a model and having a checkpoint file, you can run the move generator to see the AI play moves in the console.
 
 Example:
 ```bash
@@ -110,13 +110,24 @@ uv run python -m elephant_former.inference.generator \
     --device cuda 
 ```
 
-Replace `checkpoints/your_trial_dir/your_model.ckpt` with the actual path to your model checkpoint. You can also specify `--device cpu` if you don't have a CUDA-enabled GPU, or adjust `--max_turns` and `--fen` for different game configurations.
+You can also specify `--device cpu` if you don't have a CUDA-enabled GPU, or adjust `--max_turns` and `--fen` for different game configurations.
 
 ### Running Evaluation
 
 To evaluate a trained model on various metrics, use the `evaluator.py` script.
 
-**Example: Calculating Win Rate against a Random Opponent**
+**Example: Calculating Win Rate with the Best Model**
+```bash
+uv run python -m elephant_former.evaluation.evaluator \
+    --model_path checkpoints/trial-2-resume-1/elephant_former-epoch=22-val_loss=6.36.ckpt \
+    --pgn_file_path data/real/test_split.pgn \
+    --device cpu \
+    --metric win_rate \
+    --num_win_rate_games 50 \
+    --max_turns_win_rate 150
+```
+
+**Using your own model and dataset:**
 ```bash
 uv run python -m elephant_former.evaluation.evaluator \
     --model_path checkpoints/your_trial_dir/your_model.ckpt \
@@ -125,9 +136,7 @@ uv run python -m elephant_former.evaluation.evaluator \
     --metric win_rate \
     --num_win_rate_games 50 \
     --max_turns_win_rate 150
-```
-
-Replace checkpoint and PGN paths accordingly. 
+``` 
 
 Other metrics can be calculated by changing the `--metric` argument:
 *   `--metric accuracy`: Calculates prediction accuracy on the PGN file.
