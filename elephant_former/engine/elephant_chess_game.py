@@ -553,36 +553,44 @@ class ElephantChessGame:
                         return True # The square is attacked by the Flying General rule.
         # --- End of New block ---
 
-        # Original logic for checking attacks from other pieces
-        for py in range(BOARD_HEIGHT):
-            for px in range(BOARD_WIDTH):
-                pseudo_piece_val = target_board[py, px]
-                if pseudo_piece_val != EMPTY:
-                    piece_player_for_pseudo_moves = Player.RED if pseudo_piece_val > 0 else Player.BLACK
-                    if piece_player_for_pseudo_moves == attacker_player:
-                        # We don't need to check King moves again here, as that would be a normal king move (1 step)
-                        # and the special Flying General case is now handled above.
-                        if abs(pseudo_piece_val) == R_KING:
-                            continue
+        # Original logic for checking attacks from other pieces.
+        # The per-piece move generators read self.board, so it must temporarily
+        # point at target_board — otherwise candidate-move tests are evaluated
+        # against the stale pre-move position.
+        original_board = self.board
+        self.board = target_board
+        try:
+            for py in range(BOARD_HEIGHT):
+                for px in range(BOARD_WIDTH):
+                    pseudo_piece_val = target_board[py, px]
+                    if pseudo_piece_val != EMPTY:
+                        piece_player_for_pseudo_moves = Player.RED if pseudo_piece_val > 0 else Player.BLACK
+                        if piece_player_for_pseudo_moves == attacker_player:
+                            # We don't need to check King moves again here, as that would be a normal king move (1 step)
+                            # and the special Flying General case is now handled above.
+                            if abs(pseudo_piece_val) == R_KING:
+                                continue
 
-                        # Generate pseudo-legal moves for the attacker's piece
-                        pseudo_moves: List[Move] = []
-                        if abs(pseudo_piece_val) == R_ADVISOR:
-                            pseudo_moves = self._get_advisor_moves(px, py, attacker_player)
-                        elif abs(pseudo_piece_val) == R_ELEPHANT:
-                            pseudo_moves = self._get_elephant_moves(px, py, attacker_player)
-                        elif abs(pseudo_piece_val) == R_HORSE:
-                            pseudo_moves = self._get_horse_moves(px, py, attacker_player)
-                        elif abs(pseudo_piece_val) == R_CHARIOT:
-                            pseudo_moves = self._get_chariot_moves(px, py, attacker_player)
-                        elif abs(pseudo_piece_val) == R_CANNON:
-                            pseudo_moves = self._get_cannon_moves(px, py, attacker_player)
-                        elif abs(pseudo_piece_val) == R_SOLDIER:
-                            pseudo_moves = self._get_soldier_moves(px, py, attacker_player)
-                        
-                        for _, _, p_tx, p_ty in pseudo_moves:
-                            if p_tx == x and p_ty == y:
-                                return True # The square is attacked
+                            # Generate pseudo-legal moves for the attacker's piece
+                            pseudo_moves: List[Move] = []
+                            if abs(pseudo_piece_val) == R_ADVISOR:
+                                pseudo_moves = self._get_advisor_moves(px, py, attacker_player)
+                            elif abs(pseudo_piece_val) == R_ELEPHANT:
+                                pseudo_moves = self._get_elephant_moves(px, py, attacker_player)
+                            elif abs(pseudo_piece_val) == R_HORSE:
+                                pseudo_moves = self._get_horse_moves(px, py, attacker_player)
+                            elif abs(pseudo_piece_val) == R_CHARIOT:
+                                pseudo_moves = self._get_chariot_moves(px, py, attacker_player)
+                            elif abs(pseudo_piece_val) == R_CANNON:
+                                pseudo_moves = self._get_cannon_moves(px, py, attacker_player)
+                            elif abs(pseudo_piece_val) == R_SOLDIER:
+                                pseudo_moves = self._get_soldier_moves(px, py, attacker_player)
+
+                            for _, _, p_tx, p_ty in pseudo_moves:
+                                if p_tx == x and p_ty == y:
+                                    return True # The square is attacked
+        finally:
+            self.board = original_board
         return False
 
     def is_king_in_check(self, player: Player, board_state: Optional[Board] = None) -> bool:
@@ -624,11 +632,13 @@ class ElephantChessGame:
                 temp_board[ty, tx] = piece_to_move
                 temp_board[fy, fx] = EMPTY
                 
-                # First check: Does this move leave my own king in check?
+                # Rules legality: a move is legal iff it does not leave the mover's
+                # own king in check. Mate-in-one avoidance is an AI-layer choice,
+                # not a xiangqi rule — filtering it here corrupts checkmate
+                # detection (get_all_legal_moves() == [] is the game-over test)
+                # and rejects legal moves when replaying real games.
                 if not self.is_king_in_check(player, temp_board):
-                    # Second check: Does this move allow opponent to deliver checkmate next turn?
-                    if not self._move_allows_opponent_checkmate(move_candidate, player):
-                        legal_moves.append(move_candidate)
+                    legal_moves.append(move_candidate)
         
         # print(f"Legal moves: {legal_moves}")
         return legal_moves
