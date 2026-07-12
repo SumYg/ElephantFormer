@@ -1,32 +1,10 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Project Overview
 
 ElephantFormer is a Transformer-based move prediction model for Elephant Chess (Chinese Chess). The project implements a GPT-style architecture that learns to predict chess moves as sequences of coordinate tokens. Each move is represented as a 4-tuple: `(from_x, from_y, to_x, to_y)` where coordinates are tokenized into a unified vocabulary.
-
-## Current era (board-state model, since 2026-07) — READ FIRST
-
-The project pivoted to a **board-state encoder model** (squares-as-tokens, from→to
-policy head + value head). See **ROADMAP.md** ("Current state" + phase checklists)
-for status, results, and next steps. Key facts a new session needs:
-
-- **Engine legality was fixed on 2026-07-12** (stale-board attack test; a
-  mate-avoidance heuristic removed from the rules layer). All results produced
-  before that date — including the README's win rates and sequence-length
-  findings — are unreliable. Do not reintroduce AI move-filtering into the engine.
-- **New pipeline commands** (the legacy sections below still describe the old
-  move-history model, which is superseded):
-  - Train: `uv run python train_board.py --pgn_file_path data/<file>.pgns [more.pgns] --accelerator gpu`
-    (supports `--resume_from auto`, mid-epoch step checkpoints, multi-PGN concat)
-  - Evaluate vs baselines: `uv run python -m elephant_former.evaluation.board_match --mode model-vs-random|model-vs-greedy|greedy-vs-random --model_path <ckpt>`
-  - Pikafish annotation (Phase 1 distillation labels): `uv run python -m elephant_former.data_utils.pikafish_annotator --cache_file data/cache/<cache>.npz --out data/annotations/<out>.npz` (supports `--start/--end` sharding and `--merge`)
-  - Job monitoring: `uv run python scripts/training_status.py` (detached jobs log to `logs/`)
-- **Position caches** live in `data/cache/*.npz`, keyed by PGN *content* (portable
-  across machines).
-- Tests are plain scripts: `uv run python tests/test_board_*.py`, `tests/test_pikafish_annotator.py`.
-- Pikafish engine binaries live in `tools/` (Windows + Linux + NNUE weights).
 
 ## Development Commands
 

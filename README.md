@@ -1,6 +1,12 @@
 # ElephantFormer
 A Transformer-based move prediction model for Elephant Chess.
 
+> **⚠️ Update (2026-07):** the rules engine had legality bugs until 2026-07-12, so
+> every result below (win rates, the sequence-length findings) predates the fix and
+> is unreliable. The project has since moved to a board-state model with a
+> policy+value head — see **[ROADMAP.md](ROADMAP.md)** for current status and
+> `train_board.py` / `elephant_former/evaluation/board_match.py` for the new pipeline.
+
 ## Getting Started
 
 ### Running the Example Parser
