@@ -66,7 +66,8 @@ RULE HIERARCHY (checked in this order):
    - Reason: Neutral repetition
 
 6. CHECKMATE/STALEMATE
-   - Standard game ending conditions
+   - No legal moves ends the game; the player with no moves loses
+     (stalemate 困毙 is a loss, not a draw, under xiangqi rules)
    """)
 
 

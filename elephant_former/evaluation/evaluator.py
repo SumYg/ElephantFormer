@@ -408,10 +408,11 @@ class ModelEvaluator:
                 if move_to_apply is None: # No legal moves available for the current player
                     if game.is_king_in_check(player_to_move):
                         game_over_status = "checkmate"
-                        winner = game.get_opponent(player_to_move)
                     else:
+                        # 困毙: stalemate loses for the player with no moves.
                         game_over_status = "stalemate"
-                    break 
+                    winner = game.get_opponent(player_to_move)
+                    break
 
                 # Track the move
                 game_moves.append(move_to_apply)
@@ -433,19 +434,16 @@ class ModelEvaluator:
                     break
             
             # Determine game outcome and save if requested
-            if game_over_status == "checkmate":
+            if game_over_status in ("checkmate", "stalemate"):
                 if winner == model_player_this_game:
                     wins += 1
                     pgn_result = "1-0" if ai_plays_red else "0-1"
                 elif winner is not None: # Opponent won
                     losses += 1
                     pgn_result = "0-1" if ai_plays_red else "1-0"
-                else: # Should not happen if winner is set on checkmate
+                else: # Should not happen if winner is set on checkmate/stalemate
                     draws += 1
                     pgn_result = "1/2-1/2"
-            elif game_over_status == "stalemate":
-                draws += 1
-                pgn_result = "1/2-1/2"
             else: # Max turns reached
                 draws += 1
                 pgn_result = "1/2-1/2"

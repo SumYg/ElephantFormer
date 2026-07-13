@@ -96,7 +96,8 @@ def play_game(
         if move is None:
             if game.is_king_in_check(mover):
                 return "checkmate", game.get_opponent(mover)
-            return "stalemate", None
+            # 困毙: no legal moves loses even without check.
+            return "stalemate", game.get_opponent(mover)
 
         game.apply_move(move)
         status, winner = game.check_game_over()

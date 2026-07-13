@@ -136,7 +136,7 @@ status, winner = game.check_game_over()
 # - "check_vs_chase": Chasing player loses
 # - "draw_by_repetition": Regular repetition (claim-based)
 # - "checkmate": Winner determined
-# - "stalemate": Draw
+# - "stalemate": Stalemated player loses (困毙)
 # - None: Game continues
 
 # For regular repetition, players can claim draw:

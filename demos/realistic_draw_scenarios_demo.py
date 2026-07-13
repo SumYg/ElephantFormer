@@ -102,7 +102,7 @@ FORCED DRAWS (No Player Choice):
 🔴 Mutual Perpetual Check → Draw
 🔴 Check vs Chase → Chasing player loses
 🔴 Checkmate → Winner determined
-🔴 Stalemate → Draw
+🔴 Stalemate (困毙) → Stalemated player loses
 🔴 Insufficient Material → Draw
 
 OPTIONAL DRAWS (Player Choice Required):

@@ -134,7 +134,7 @@ def demonstrate_rule_priorities():
     print("4. Perpetual chase → Chasing player loses")
     print("5. Regular threefold repetition → Draw")
     print("6. Checkmate → Winner determined")
-    print("7. Stalemate → Draw")
+    print("7. Stalemate (困毙) → Stalemated player loses")
     
     game = ElephantChessGame()
     status, winner = game.check_game_over()

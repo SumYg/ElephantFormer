@@ -893,9 +893,11 @@ class ElephantChessGame:
         """
         Checks if the game has ended due to checkmate, stalemate, or perpetual check/chase.
         Returns a tuple: (status_string or None, winner_player_enum or None).
-        Status can be "checkmate", "stalemate", "perpetual_check", "perpetual_chase", 
+        Status can be "checkmate", "stalemate", "perpetual_check", "perpetual_chase",
         "mutual_perpetual_check", "check_vs_chase", "draw_by_repetition".
         Winner is the player who won, or None if draw/ongoing.
+        Stalemate (困毙) is a loss for the stalemated player under standard
+        xiangqi rules, so "stalemate" carries a winner.
         """
         # Check for mutual perpetual check first (draw)
         is_mutual_check, status = self._detect_mutual_perpetual_check()
@@ -925,12 +927,13 @@ class ElephantChessGame:
         player = self.current_player
         legal_moves = self.get_all_legal_moves(player)
 
-        if not legal_moves: 
+        if not legal_moves:
             is_in_check_flag = self.is_king_in_check(player)
             if is_in_check_flag:
                 return "checkmate", self.get_opponent(player)
             else:
-                return "stalemate", None
+                # 困毙: a player with no legal moves loses even when not in check.
+                return "stalemate", self.get_opponent(player)
         
         return None, None
 

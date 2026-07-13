@@ -370,13 +370,14 @@ class MoveGenerator:
         else:
             # Game ending scenarios
             end_message = f"{player_name} (Model) has no legal moves."
+            opponent = self.game.get_opponent(current_player_enum)
             if self.game.is_king_in_check(current_player_enum):
-                opponent = self.game.get_opponent(current_player_enum)
                 end_message += f"\nCheckmate! {opponent.name} wins."
                 game_result = ("checkmate", opponent)
             else:
-                end_message += "\nStalemate! It's a draw."
-                game_result = ("stalemate", None)
+                # 困毙: the stalemated player loses under xiangqi rules.
+                end_message += f"\nStalemate! {opponent.name} wins."
+                game_result = ("stalemate", opponent)
             
             # Display final board state with game over info
             self.display_board(game_info=end_message)
