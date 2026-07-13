@@ -20,7 +20,7 @@ for status, results, and next steps. Key facts a new session needs:
   move-history model, which is superseded):
   - Train: `uv run python train_board.py --pgn_file_path data/<file>.pgns [more.pgns] --accelerator gpu`
     (supports `--resume_from auto`, mid-epoch step checkpoints, multi-PGN concat)
-  - Evaluate vs baselines: `uv run python -m elephant_former.evaluation.board_match --mode model-vs-random|model-vs-greedy|greedy-vs-random --model_path <ckpt>`
+  - Evaluate vs baselines: `uv run python -m elephant_former.evaluation.board_match --mode model-vs-random|model-vs-greedy|greedy-vs-random --model_path <ckpt>` (add `--rerank [--rerank_top_k K]` for the value-head 1-ply rerank bot — the Phase 0 exit-criteria configuration)
   - Pikafish annotation (Phase 1 distillation labels): `uv run python -m elephant_former.data_utils.pikafish_annotator --cache_file data/cache/<cache>.npz --out data/annotations/<out>.npz` (supports `--start/--end` sharding and `--merge`)
   - Job monitoring: `uv run python scripts/training_status.py` (detached jobs log to `logs/`)
 - **Position caches** live in `data/cache/*.npz`, keyed by PGN *content* (portable
