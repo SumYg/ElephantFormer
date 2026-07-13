@@ -322,6 +322,10 @@ class BoardChessDataset(Dataset):
     def __len__(self) -> int:
         return len(self._arrays)
 
+    def game_ids(self) -> np.ndarray:
+        """Per-position game ids ``(N,)``, derived from the previous-move flags."""
+        return game_ids_from_flags(self._arrays.flags)
+
     def __getitem__(self, idx: int) -> BoardExample:
         a = self._arrays
         return (
@@ -331,6 +335,77 @@ class BoardChessDataset(Dataset):
             torch.tensor(int(a.policy_index[idx]), dtype=torch.long),
             torch.tensor(int(a.value[idx]), dtype=torch.long),
         )
+
+
+def game_ids_from_flags(flags: np.ndarray) -> np.ndarray:
+    """Recover per-position game ids ``(N,)`` from cached feature flags.
+
+    The first position of a game is the only one with no previous-move flag
+    (``extract_features`` sets ``FLAG_PREV_FROM`` from the move history, which
+    is empty exactly at a game's first position), so game boundaries are
+    recoverable from existing caches without a format change or rebuild.
+    """
+    if flags.shape[0] == 0:
+        return np.zeros((0,), dtype=np.int64)
+    starts = flags[:, :, bf.FLAG_PREV_FROM].sum(axis=1) == 0
+    if not starts[0]:
+        raise ValueError(
+            "First cached position has a previous-move flag; positions are not "
+            "in game order — cannot derive game boundaries."
+        )
+    return np.cumsum(starts.astype(np.int64)) - 1
+
+
+def split_indices_by_game(
+    game_ids: np.ndarray,
+    test_ratio: float,
+    val_ratio: float,
+    seed: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Split position indices so every game lands wholly in one split.
+
+    Ratio semantics match ``train_board.py``'s position-level split:
+    ``test_ratio`` is the target fraction of all positions, ``val_ratio`` the
+    target fraction of the remaining (non-test) positions. Whole games are
+    assigned in a seeded shuffled order until each target is reached, so the
+    achieved fractions deviate by at most one game.
+
+    Returns ``(train_indices, val_indices, test_indices)`` int64 arrays.
+    """
+    n = int(game_ids.shape[0])
+    if n == 0:
+        empty = np.zeros((0,), dtype=np.int64)
+        return empty, empty.copy(), empty.copy()
+
+    num_games = int(game_ids[-1]) + 1
+    counts = np.bincount(game_ids, minlength=num_games)
+    order = np.random.default_rng(seed).permutation(num_games)
+    cum = np.cumsum(counts[order])
+
+    def _games_to_reach(target: int, start: int) -> int:
+        """Smallest k such that games order[start:start+k] hold >= target positions."""
+        if target <= 0:
+            return 0
+        base = cum[start - 1] if start > 0 else 0
+        k = int(np.searchsorted(cum, base + target, side="left")) + 1 - start
+        return min(k, num_games - start)
+
+    n_test_target = int(n * test_ratio)
+    k_test = _games_to_reach(n_test_target, 0)
+    n_test = int(cum[k_test - 1]) if k_test > 0 else 0
+    n_val_target = int((n - n_test) * val_ratio)
+    k_val = _games_to_reach(n_val_target, k_test)
+
+    # 0 = train, 1 = val, 2 = test per game, broadcast to positions.
+    labels = np.zeros(num_games, dtype=np.int8)
+    labels[order[:k_test]] = 2
+    labels[order[k_test : k_test + k_val]] = 1
+    row_labels = labels[game_ids]
+    return (
+        np.flatnonzero(row_labels == 0),
+        np.flatnonzero(row_labels == 1),
+        np.flatnonzero(row_labels == 2),
+    )
 
 
 def board_collate_fn(batch: List[BoardExample]) -> Tuple[torch.Tensor, ...]:

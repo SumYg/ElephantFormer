@@ -6,9 +6,10 @@ from->to policy head, and the value head.
 
 The expensive per-position featurisation is cached to disk (see
 ``BoardChessDataset``); the full dataset is built once from ``--pgn_file_path``
-and then split at the position level with a fixed seed. Position-level splitting
-keeps the cache simple; the mild same-game leakage across splits is acceptable
-for Phase 0 (see README/report TODOs for game-level splitting).
+and then split with a fixed seed. The default ``--split_by game`` keeps every
+game wholly inside one split (no same-game leakage between train and val/test);
+``--split_by position`` reproduces the legacy leaky split for resuming runs
+started before game-level splitting existed.
 """
 
 import argparse
@@ -16,13 +17,18 @@ import json
 import random
 from pathlib import Path
 
+import numpy as np
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-from torch.utils.data import ConcatDataset, DataLoader, random_split
+from torch.utils.data import ConcatDataset, DataLoader, Subset, random_split
 
 from elephant_former.data.elephant_parser import parse_iccs_pgn_file
-from elephant_former.data_utils.board_dataset import BoardChessDataset, board_collate_fn
+from elephant_former.data_utils.board_dataset import (
+    BoardChessDataset,
+    board_collate_fn,
+    split_indices_by_game,
+)
 from elephant_former.training.board_lightning_module import BoardLightningModule
 
 
@@ -70,6 +76,7 @@ def main(args: argparse.Namespace) -> None:
         all_games = all_games[: int(len(all_games) * args.subset_ratio)]
         print(f"Using a subset of {len(all_games)} games ({args.subset_ratio * 100:.2f}%). Caching disabled for subsets.")
         dataset = BoardChessDataset(games=all_games, use_cache=False)
+        parts = [dataset]
     else:
         # One (cached) dataset per source PGN, concatenated. Content-keyed caches
         # mean each part loads without a rebuild wherever it was built.
@@ -88,12 +95,34 @@ def main(args: argparse.Namespace) -> None:
         return
 
     n = len(dataset)
-    n_test = int(n * args.test_split_ratio)
-    n_val = int((n - n_test) * args.val_split_ratio)
-    n_train = n - n_test - n_val
-    generator = torch.Generator().manual_seed(args.split_seed)
-    train_ds, val_ds, test_ds = random_split(dataset, [n_train, n_val, n_test], generator=generator)
-    print(f"Split {n} positions -> train {n_train}, val {n_val}, test {n_test}.")
+    if args.split_by == "game":
+        # Whole games per split; ids are offset per part so they stay unique
+        # across concatenated PGN sources.
+        id_parts, offset = [], 0
+        for part in parts:
+            ids = part.game_ids()
+            id_parts.append(ids + offset)
+            if len(ids):
+                offset += int(ids[-1]) + 1
+        game_ids = np.concatenate(id_parts) if id_parts else np.zeros((0,), dtype=np.int64)
+        train_idx, val_idx, test_idx = split_indices_by_game(
+            game_ids, args.test_split_ratio, args.val_split_ratio, args.split_seed
+        )
+        train_ds = Subset(dataset, train_idx)
+        val_ds = Subset(dataset, val_idx)
+        test_ds = Subset(dataset, test_idx)
+        num_games = int(game_ids[-1]) + 1 if len(game_ids) else 0
+        print(
+            f"Game-level split of {num_games} games / {n} positions -> "
+            f"train {len(train_ds)}, val {len(val_ds)}, test {len(test_ds)}."
+        )
+    else:
+        n_test = int(n * args.test_split_ratio)
+        n_val = int((n - n_test) * args.val_split_ratio)
+        n_train = n - n_test - n_val
+        generator = torch.Generator().manual_seed(args.split_seed)
+        train_ds, val_ds, test_ds = random_split(dataset, [n_train, n_val, n_test], generator=generator)
+        print(f"Position-level split of {n} positions -> train {n_train}, val {n_val}, test {n_test}.")
 
     # Resuming with different data or split parameters silently shifts the
     # train/val/test membership (optimizer state would meet leaked val data).
@@ -106,14 +135,19 @@ def main(args: argparse.Namespace) -> None:
             and prev_manifest.get("split_seed") == args.split_seed
             and prev_manifest.get("test_split_ratio") == args.test_split_ratio
             and prev_manifest.get("val_split_ratio") == args.val_split_ratio
+            # Manifests predating game-level splits used the position scheme.
+            and prev_manifest.get("split_by", "position") == args.split_by
             and prev_manifest.get("n_positions") in (None, n)
         )
         if not same_data and not args.allow_dataset_change:
             raise SystemExit(
                 "Resume refused: dataset/split differs from the original run "
                 f"(was pgn={prev_manifest.get('pgn_file_path')}, "
-                f"n={prev_manifest.get('n_positions')}, seed={prev_manifest.get('split_seed')}; "
-                f"now pgn={args.pgn_file_path}, n={n}, seed={args.split_seed}). "
+                f"n={prev_manifest.get('n_positions')}, seed={prev_manifest.get('split_seed')}, "
+                f"split_by={prev_manifest.get('split_by', 'position')}; "
+                f"now pgn={args.pgn_file_path}, n={n}, seed={args.split_seed}, "
+                f"split_by={args.split_by}). "
+                "Resuming a pre-game-split run? Pass --split_by position. "
                 "Pass --allow_dataset_change to fine-tune on new data deliberately."
             )
 
@@ -207,6 +241,11 @@ if __name__ == "__main__":
     parser.add_argument("--cache_dir", type=str, default="data/cache")
     parser.add_argument("--no_cache", action="store_true", help="Disable the on-disk position cache.")
     parser.add_argument("--split_seed", type=int, default=42)
+    parser.add_argument(
+        "--split_by", type=str, default="game", choices=["game", "position"],
+        help="'game' (default) keeps whole games in one split; 'position' is the "
+        "legacy leaky split, needed to resume runs started before game-level splits.",
+    )
     parser.add_argument("--num_workers", type=int, default=0)
     # Model
     parser.add_argument("--d_model", type=int, default=256)
