@@ -16,10 +16,10 @@ North star: surpass Pikafish. Reality check, stated once so the plan stays hones
 
 - **Engine legality fixed** (stale-board attack test in `is_square_attacked_by`; mate-avoidance heuristic removed from `get_all_legal_moves`). All pre-fix results — the old 46.2% win rate, the README's sequence-length findings — are unreliable. Skip rate on real games went 63% → 0.05%.
 - **Phase 0 model trained** (WXF corpus, 3.57M positions, 10 epochs on a single consumer GPU): test policy accuracy **48.8%** (legacy model: 12.49%), value accuracy 59.8%.
-- **Scoreboard**: vs greedy-material **76%** (bar 60% — passed) · vs random **76%** (bar 95% — not yet; identical score vs both opponents ⇒ losses are searchless mate-blunders, not opponent strength).
-- **Assets**: content-keyed position caches (`data/cache/`: WXF 3.57M + dpxq 8.11M ≈ 11.7M positions), Pikafish + resumable/shardable annotator (`pikafish_annotator.py`, ~40 pos/s/core measured), resume + step-checkpoint + multi-PGN training, job monitor `scripts/training_status.py`, detached jobs logging to `logs/`.
-- **In flight**: combined 11.7M-position training run → `checkpoints/board-combined/`.
-- **Next**: value-head 1-ply rerank bot (attack the blunder rate) → rerun scoreboard; overnight ~1M-position Pikafish annotation; game-level splits.
+- **Scoreboard** (epoch-09 WXF checkpoint): raw policy **76%** vs both opponents; with the **value-head 1-ply rerank bot** (`board_match --rerank`): vs random **96%** (48W-1L-1D / 50, bar 95% — passed) · vs greedy **85%** (17W-2L-1D / 20, bar 60% — passed). Mate-blunders are gone (every win by checkmate); the two greedy losses were **perpetual-chase adjudications** against the deterministic rerank bot — the new top failure mode.
+- **Assets**: content-keyed position caches (`data/cache/`: WXF 3.57M + dpxq 8.11M ≈ 11.7M positions), Pikafish + resumable/shardable annotator (`pikafish_annotator.py`, ~40 pos/s/core measured), resume + step-checkpoint + multi-PGN training, job monitor `scripts/training_status.py`, detached jobs logging to `logs/`, value-head 1-ply rerank bot with exact mate/stalemate terminal detection (`board_match --rerank [--rerank_top_k K]`), `ElephantChessGame.copy()` for lookahead/search.
+- **In flight**: combined 11.7M-position training run → `checkpoints/board-combined/` (epoch 4: val_loss 1.96, already below the WXF run's final 2.03).
+- **Next**: rerun the scoreboard (raw + `--rerank`) on the finished combined checkpoint; overnight ~1M-position Pikafish annotation; game-level splits; perpetual-chase avoidance at inference (repetition-aware move selection).
 - Legacy assets still in use: rules engine (`elephant_former/engine/`), PGN/ICCS parser, Lightning conventions.
 
 ## Principles (what the 2024–2026 literature says)
@@ -48,7 +48,7 @@ North star: surpass Pikafish. Reality check, stated once so the plan stays hones
 - [x] New baseline opponent: greedy material bot alongside the random bot (greedy beats random 8/10 — sanity confirmed)
 - [x] Keep: engine, parser, dataset plumbing, Lightning loop
 
-**Status 2026-07-12:** exit criteria — move-match 48.8% ✓ (bar 30%) · vs greedy 76% ✓ (bar 60%) · vs random 76% ✗ (bar 95%). Remaining gap is searchless blunders; being attacked via more data (combined 11.7M run in flight) and a value-head 1-ply rerank at inference.
+**Status 2026-07-12 (late):** exit criteria all met — move-match 48.8% ✓ (bar 30%) · vs greedy 85% ✓ (bar 60%) · vs random 96% ✓ (bar 95%), the latter two via the value-head 1-ply rerank bot on the epoch-09 WXF checkpoint. Phase 0 is complete; confirm on the combined-run checkpoint, then Phase 1.
 
 Architecture target: encoder-only, ~91-token input, 8–12 layers, d_model 256–384 (≈10–30M params).
 

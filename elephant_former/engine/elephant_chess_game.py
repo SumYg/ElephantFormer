@@ -144,6 +144,24 @@ class ElephantChessGame:
         self.move_sequence: List[Tuple[Move, Player]] = [] # Track (move, player_who_made_move)
         self._update_position_history() # Record the initial position
 
+    def copy(self) -> "ElephantChessGame":
+        """Returns an independent copy of the game state.
+
+        Intended for lookahead/search: applying moves to the copy leaves the
+        original untouched, and the copied repetition/perpetual tracking keeps
+        ``check_game_over`` exact on the copy.
+        """
+        clone = ElephantChessGame.__new__(ElephantChessGame)
+        clone.board = self.board.copy()
+        clone.current_player = self.current_player
+        clone.move_history = list(self.move_history)
+        clone.halfmove_clock = self.halfmove_clock
+        clone.fullmove_number = self.fullmove_number
+        clone.position_history = self.position_history.copy()
+        clone.position_sequence = list(self.position_sequence)
+        clone.move_sequence = list(self.move_sequence)
+        return clone
+
     def get_board_array(self) -> Board:
         """Returns the current board state as a NumPy array."""
         return np.copy(self.board)

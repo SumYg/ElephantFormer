@@ -1,8 +1,10 @@
 """Play the board-state ElephantFormer against the baseline bots (Phase 0).
 
 Provides a :class:`ModelBot` (forward pass -> mask illegal moves -> argmax or
-temperature sample) and a small match runner, plus a CLI for the three sanity
-matchups: ``model-vs-random``, ``model-vs-greedy``, ``greedy-vs-random``.
+temperature sample), a :class:`ValueRerankBot` (value-head 1-ply rerank of the
+legal moves) and a small match runner, plus a CLI for the three sanity
+matchups: ``model-vs-random``, ``model-vs-greedy``, ``greedy-vs-random``
+(``--rerank`` upgrades the model side to the rerank bot).
 
 Colours are alternated across games so neither side has a fixed first-move edge;
 results are always reported from the first bot's perspective.
@@ -12,8 +14,9 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
+import numpy as np
 import torch
 
 from elephant_former.data_utils import board_features as bf
@@ -28,22 +31,39 @@ class ModelBot(Bot):
 
     def __init__(
         self,
-        model_path: str,
+        model_path: Optional[str] = None,
         device: str = "cpu",
         temperature: float = 0.0,
         seed: Optional[int] = None,
+        module: Optional[BoardLightningModule] = None,
     ) -> None:
         self.name = "model"
         self.device = torch.device(device)
         self.temperature = temperature
-        self.model = BoardLightningModule.load_from_checkpoint(
-            checkpoint_path=model_path, map_location=self.device
-        )
+        if module is None:
+            if model_path is None:
+                raise ValueError("Either model_path or module is required.")
+            module = BoardLightningModule.load_from_checkpoint(
+                checkpoint_path=model_path, map_location=self.device
+            )
+        self.model = module
         self.model.to(self.device)
         self.model.eval()
         self._generator = torch.Generator(device="cpu")
         if seed is not None:
             self._generator.manual_seed(seed)
+
+    def _forward_features(
+        self, feats_list: Sequence[bf.BoardFeatures]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Batch a list of positions through the model; returns (policy, value) logits."""
+        piece_ids = torch.from_numpy(np.stack([f.piece_ids for f in feats_list])).long()
+        flags = torch.from_numpy(np.stack([f.flags for f in feats_list])).long()
+        side = torch.tensor([f.side_to_move for f in feats_list], dtype=torch.long)
+        with torch.no_grad():
+            return self.model(
+                piece_ids.to(self.device), flags.to(self.device), side.to(self.device)
+            )
 
     def select_move(self, game: ElephantChessGame) -> Optional[Move]:
         legal = game.get_all_legal_moves_basic(game.current_player)
@@ -51,12 +71,7 @@ class ModelBot(Bot):
             return None
 
         feats = bf.extract_features(game, stm_legal_moves=legal)
-        piece_ids = torch.from_numpy(feats.piece_ids).long().unsqueeze(0).to(self.device)
-        flags = torch.from_numpy(feats.flags).long().unsqueeze(0).to(self.device)
-        side = torch.tensor([feats.side_to_move], dtype=torch.long, device=self.device)
-
-        with torch.no_grad():
-            policy_logits, _ = self.model(piece_ids, flags, side)
+        policy_logits, _ = self._forward_features([feats])
 
         legal_indices = [bf.move_to_policy_index(m) for m in legal]
         idx = select_move_index(
@@ -66,6 +81,85 @@ class ModelBot(Bot):
             generator=self._generator,
         )
         return bf.policy_index_to_move(idx)
+
+
+class ValueRerankBot(ModelBot):
+    """Value-head 1-ply rerank: play the move whose resulting position the
+    value head likes best for the mover.
+
+    Every candidate move is applied to a copy of the game and the child position
+    is scored ``P(loss) + 0.5 * P(draw)`` from the value head — the child's
+    side-to-move is the opponent, so that is the mover's expected score. A move
+    that leaves the opponent without a legal reply scores 1.0, whether by
+    checkmate or stalemate (困毙: the stalemated player loses under xiangqi
+    rules). Ties break on the policy logit of the move; ``top_k``
+    restricts reranking to the ``top_k`` policy moves (0 = rerank all legal).
+    """
+
+    def __init__(
+        self,
+        model_path: Optional[str] = None,
+        device: str = "cpu",
+        top_k: int = 0,
+        seed: Optional[int] = None,
+        module: Optional[BoardLightningModule] = None,
+    ) -> None:
+        super().__init__(
+            model_path=model_path, device=device, temperature=0.0, seed=seed, module=module
+        )
+        self.name = "model-rerank"
+        self.top_k = top_k
+
+    def score_candidates(self, game: ElephantChessGame, moves: Sequence[Move]) -> List[float]:
+        """Expected score in ``[0, 1]`` for the mover after each candidate move."""
+        scores = [0.0] * len(moves)
+        pending: List[int] = []
+        pending_feats: List[bf.BoardFeatures] = []
+
+        for i, move in enumerate(moves):
+            child = game.copy()
+            child.apply_move(move)
+            replies = child.get_all_legal_moves_basic(child.current_player)
+            if not replies:
+                # No reply wins outright: checkmate, or stalemate (困毙 — the
+                # stalemated player loses).
+                scores[i] = 1.0
+                continue
+            pending.append(i)
+            pending_feats.append(bf.extract_features(child, stm_legal_moves=replies))
+
+        if pending:
+            _, value_logits = self._forward_features(pending_feats)
+            probs = torch.softmax(value_logits.float().cpu(), dim=-1)
+            # Value classes are (loss, draw, win) for the child's side-to-move —
+            # the opponent — so the mover's expected score is P(loss) + 0.5 P(draw).
+            child_scores = probs[:, 0] + 0.5 * probs[:, 1]
+            for i, score in zip(pending, child_scores.tolist()):
+                scores[i] = float(score)
+        return scores
+
+    def select_move(self, game: ElephantChessGame) -> Optional[Move]:
+        legal = game.get_all_legal_moves_basic(game.current_player)
+        if not legal:
+            return None
+        if len(legal) == 1:
+            return legal[0]
+
+        feats = bf.extract_features(game, stm_legal_moves=legal)
+        policy_logits, _ = self._forward_features([feats])
+        policy_logits = policy_logits[0].cpu()
+        move_logits = [float(policy_logits[bf.move_to_policy_index(m)]) for m in legal]
+
+        candidates = sorted(range(len(legal)), key=lambda i: move_logits[i], reverse=True)
+        if 0 < self.top_k < len(candidates):
+            candidates = candidates[: self.top_k]
+
+        scores = self.score_candidates(game, [legal[i] for i in candidates])
+        best = max(
+            range(len(candidates)),
+            key=lambda j: (scores[j], move_logits[candidates[j]]),
+        )
+        return legal[candidates[best]]
 
 
 @dataclass
@@ -141,13 +235,19 @@ def play_match(
     )
 
 
+def _make_model_bot(args: argparse.Namespace) -> Bot:
+    if args.rerank:
+        return ValueRerankBot(
+            args.model_path, device=args.device, top_k=args.rerank_top_k, seed=args.seed
+        )
+    return ModelBot(args.model_path, device=args.device, temperature=args.temperature, seed=args.seed)
+
+
 def _build_bots(args: argparse.Namespace) -> Tuple[Bot, Bot]:
     if args.mode == "model-vs-random":
-        model = ModelBot(args.model_path, device=args.device, temperature=args.temperature, seed=args.seed)
-        return model, make_bot("random", seed=args.seed)
+        return _make_model_bot(args), make_bot("random", seed=args.seed)
     if args.mode == "model-vs-greedy":
-        model = ModelBot(args.model_path, device=args.device, temperature=args.temperature, seed=args.seed)
-        return model, make_bot("greedy", seed=args.seed)
+        return _make_model_bot(args), make_bot("greedy", seed=args.seed)
     if args.mode == "greedy-vs-random":
         return make_bot("greedy", seed=args.seed), make_bot("random", seed=args.seed)
     raise ValueError(f"Unknown mode: {args.mode}")
@@ -165,6 +265,17 @@ def main() -> None:
     parser.add_argument("--max_moves", type=int, default=200, help="Move (ply) cap per game.")
     parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda", "mps"])
     parser.add_argument("--temperature", type=float, default=0.0, help="0 = argmax; >0 samples legal moves.")
+    parser.add_argument(
+        "--rerank",
+        action="store_true",
+        help="Use the value-head 1-ply rerank bot for the model side (deterministic; ignores --temperature).",
+    )
+    parser.add_argument(
+        "--rerank_top_k",
+        type=int,
+        default=0,
+        help="Rerank only the top-k moves by policy logit (0 = rerank every legal move).",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
