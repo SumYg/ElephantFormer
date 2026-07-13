@@ -128,7 +128,9 @@ class PikafishEngine:
         hash_mb: int = 64,
         multipv: int = 1,
     ) -> None:
-        engine_path = Path(engine_path)
+        # Resolve before Popen: with cwd= set, POSIX resolves a relative
+        # executable path against the child's cwd, not the caller's.
+        engine_path = Path(engine_path).resolve()
         self._proc = subprocess.Popen(
             [str(engine_path)],
             cwd=str(engine_path.parent),
