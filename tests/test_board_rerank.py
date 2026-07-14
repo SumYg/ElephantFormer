@@ -145,6 +145,35 @@ def test_stalemate_is_a_win() -> None:
     print("  [ok] stalemate adjudicated as a win for the opponent")
 
 
+def test_repetition_penalty_caps_repeats() -> None:
+    # Shuffle horses out and back so the start position has occurred twice;
+    # replaying the same horse move then recreates a position seen once before.
+    module = _tiny_module()
+    game = ElephantChessGame()
+    for move in [(1, 0, 2, 2), (1, 9, 2, 7), (2, 2, 1, 0), (2, 7, 1, 9)]:
+        game.apply_move(move)
+
+    repeat_move = (1, 0, 2, 2)   # recreates the position after the first move
+    fresh_move = (7, 0, 6, 2)    # other horse: never-seen position
+
+    plain = ValueRerankBot(module=module, device="cpu", repetition_penalty=0.0)
+    penal = ValueRerankBot(module=module, device="cpu", repetition_penalty=0.1)
+
+    plain_scores = plain.score_candidates(game, [repeat_move, fresh_move])
+    penal_scores = penal.score_candidates(game, [repeat_move, fresh_move])
+
+    _check(
+        abs(plain_scores[1] - penal_scores[1]) < 1e-9,
+        "fresh move's score must be unaffected by the repetition penalty",
+    )
+    expected = min(plain_scores[0], 0.5) - 0.1
+    _check(
+        abs(penal_scores[0] - expected) < 1e-6,
+        f"repeat should score min(raw, 0.5) - penalty; got {penal_scores[0]}, expected {expected}",
+    )
+    print("  [ok] repetition penalty caps repeated positions")
+
+
 def test_top_k_one_matches_policy_argmax() -> None:
     module = _tiny_module(seed=1)
     policy_bot = ModelBot(module=module, device="cpu", temperature=0.0)
@@ -174,6 +203,7 @@ if __name__ == "__main__":
         test_terminal_win_scores_one,
         test_rerank_plays_terminal_win,
         test_stalemate_is_a_win,
+        test_repetition_penalty_caps_repeats,
         test_top_k_one_matches_policy_argmax,
         test_smoke_game_vs_random,
     ]

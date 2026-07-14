@@ -92,8 +92,12 @@ class ValueRerankBot(ModelBot):
     side-to-move is the opponent, so that is the mover's expected score. A move
     that leaves the opponent without a legal reply scores 1.0, whether by
     checkmate or stalemate (困毙: the stalemated player loses under xiangqi
-    rules). Ties break on the policy logit of the move; ``top_k``
-    restricts reranking to the ``top_k`` policy moves (0 = rerank all legal).
+    rules). A move recreating a position already seen in the game is capped at
+    0.5 and penalised ``repetition_penalty`` per prior occurrence — repeats are
+    at best drawish, and perpetual-check/chase adjudication makes the repeating
+    side *lose*, so a deterministic bot must be steered off cycles. Ties break
+    on the policy logit of the move; ``top_k`` restricts reranking to the
+    ``top_k`` policy moves (0 = rerank all legal).
     """
 
     def __init__(
@@ -101,6 +105,7 @@ class ValueRerankBot(ModelBot):
         model_path: Optional[str] = None,
         device: str = "cpu",
         top_k: int = 0,
+        repetition_penalty: float = 0.1,
         seed: Optional[int] = None,
         module: Optional[BoardLightningModule] = None,
     ) -> None:
@@ -109,12 +114,14 @@ class ValueRerankBot(ModelBot):
         )
         self.name = "model-rerank"
         self.top_k = top_k
+        self.repetition_penalty = repetition_penalty
 
     def score_candidates(self, game: ElephantChessGame, moves: Sequence[Move]) -> List[float]:
         """Expected score in ``[0, 1]`` for the mover after each candidate move."""
         scores = [0.0] * len(moves)
         pending: List[int] = []
         pending_feats: List[bf.BoardFeatures] = []
+        pending_repeats: List[int] = []
 
         for i, move in enumerate(moves):
             child = game.copy()
@@ -127,6 +134,11 @@ class ValueRerankBot(ModelBot):
                 continue
             pending.append(i)
             pending_feats.append(bf.extract_features(child, stm_legal_moves=replies))
+            # Prior occurrences of the child position in this game (the count
+            # includes the occurrence apply_move just recorded).
+            pending_repeats.append(
+                child.position_history[child.position_sequence[-1]] - 1
+            )
 
         if pending:
             _, value_logits = self._forward_features(pending_feats)
@@ -134,7 +146,9 @@ class ValueRerankBot(ModelBot):
             # Value classes are (loss, draw, win) for the child's side-to-move —
             # the opponent — so the mover's expected score is P(loss) + 0.5 P(draw).
             child_scores = probs[:, 0] + 0.5 * probs[:, 1]
-            for i, score in zip(pending, child_scores.tolist()):
+            for i, score, repeats in zip(pending, child_scores.tolist(), pending_repeats):
+                if repeats > 0 and self.repetition_penalty > 0.0:
+                    score = min(score, 0.5) - self.repetition_penalty * repeats
                 scores[i] = float(score)
         return scores
 
@@ -238,7 +252,11 @@ def play_match(
 def _make_model_bot(args: argparse.Namespace) -> Bot:
     if args.rerank:
         return ValueRerankBot(
-            args.model_path, device=args.device, top_k=args.rerank_top_k, seed=args.seed
+            args.model_path,
+            device=args.device,
+            top_k=args.rerank_top_k,
+            repetition_penalty=args.repetition_penalty,
+            seed=args.seed,
         )
     return ModelBot(args.model_path, device=args.device, temperature=args.temperature, seed=args.seed)
 
@@ -275,6 +293,13 @@ def main() -> None:
         type=int,
         default=0,
         help="Rerank only the top-k moves by policy logit (0 = rerank every legal move).",
+    )
+    parser.add_argument(
+        "--repetition_penalty",
+        type=float,
+        default=0.1,
+        help="Rerank score penalty per prior occurrence of the resulting position "
+        "(repeats are also capped at a draw score; 0 disables).",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--verbose", action="store_true")

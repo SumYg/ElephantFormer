@@ -12,14 +12,15 @@ North star: surpass Pikafish. Reality check, stated once so the plan stays hones
 
 **Headline metric:** Elo vs Pikafish restricted to N nodes. One chart: N on the x-axis, our Elo relative to Pikafish@N on the y-axis, one curve per model generation. Climbing N is the whole game.
 
-## Current state (updated 2026-07-12)
+## Current state (updated 2026-07-13)
 
 - **Engine legality fixed** (stale-board attack test in `is_square_attacked_by`; mate-avoidance heuristic removed from `get_all_legal_moves`). All pre-fix results — the old 46.2% win rate, the README's sequence-length findings — are unreliable. Skip rate on real games went 63% → 0.05%.
-- **Phase 0 model trained** (WXF corpus, 3.57M positions, 10 epochs on a single consumer GPU): test policy accuracy **48.8%** (legacy model: 12.49%), value accuracy 59.8%.
-- **Scoreboard** (epoch-09 WXF checkpoint): raw policy **76%** vs both opponents; with the **value-head 1-ply rerank bot** (`board_match --rerank`): vs random **96%** (48W-1L-1D / 50, bar 95% — passed) · vs greedy **85%** (17W-2L-1D / 20, bar 60% — passed). Mate-blunders are gone (every win by checkmate); the two greedy losses were **perpetual-chase adjudications** against the deterministic rerank bot — the new top failure mode.
+- **Phase 0 complete, confirmed on the combined model** (WXF + dpxq, 11.7M positions, 10 epochs, single consumer GPU): test policy accuracy **53.1%** (WXF-only: 48.8%; legacy model: 12.49%), value accuracy 60.5%, best ckpt `board-combined/board_former-epoch=09-val_loss=1.831.ckpt`.
+- **Scoreboard** (combined ckpt): **rerank vs random 100%** (50-0-0, bar 95%) · **rerank vs greedy 95%** (19-1-0, bar 60%; the one loss a stalemate — 1-ply can't see being boxed in, a search concern) · raw policy vs random 95% / vs greedy 90% (raw losses are all perpetual-chase cycles; the rerank bot's `--repetition_penalty` fixes those). Data scaling alone lifted the raw policy from 76% to ~95/90%.
+- **Rerank bot** (`board_match --rerank [--rerank_top_k K] [--repetition_penalty P]`): value-head 1-ply rerank with exact mate/stalemate terminal detection and repeats capped at draw score minus a per-occurrence penalty (default 0.1). On the WXF-only ckpt it scored 96%/90% — the config that first met the exit criteria.
 - **Assets**: content-keyed position caches (`data/cache/`: WXF 3.57M + dpxq 8.11M ≈ 11.7M positions), Pikafish + resumable/shardable annotator (`pikafish_annotator.py`, ~40 pos/s/core measured), resume + step-checkpoint + multi-PGN training, job monitor `scripts/training_status.py`, detached jobs logging to `logs/`, value-head 1-ply rerank bot with exact mate/stalemate terminal detection (`board_match --rerank [--rerank_top_k K]`), `ElephantChessGame.copy()` for lookahead/search.
-- **In flight**: combined 11.7M-position training run → `checkpoints/board-combined/` (epoch 4: val_loss 1.96, already below the WXF run's final 2.03).
-- **Next**: rerun the scoreboard (raw + `--rerank`) on the finished combined checkpoint; overnight ~1M-position Pikafish annotation; perpetual-chase avoidance at inference (repetition-aware move selection).
+- **Annotation complete**: the full WXF cache is Pikafish-labeled — 3,569,513/3,569,513 positions at 10k nodes, MultiPV top-k, merged to `data/annotations/WXF-pikafish-n10k-full.npz` (sharded across two VPS workers, x86 + ARM source-built engine, same 2026-01-02 release). Sanity stat: engine best move == human move on **51.1%** of positions — the model's 53.1% move-match is at the human-engine agreement ceiling; the disagreeing half is where distillation gains live.
+- **Next**: Phase 1 — mixed human+engine training data (~1:2 per Tencent), then MCTS at inference (also fixes the two 1-ply blind spots: stalemate traps and slow conversion).
 - **Game-level splits done** (`train_board.py --split_by game`, now the default): whole games stay in one split, ending same-game train/val leakage. Boundaries are derived from the cached prev-move flags — existing caches work unchanged, annotation row alignment untouched. Resuming a run started before this needs `--split_by position` (the resume guard says so). Note: val_loss will read *higher* on the next run than leaky-split runs — that's honesty, not regression.
 - Legacy assets still in use: rules engine (`elephant_former/engine/`), PGN/ICCS parser, Lightning conventions.
 
@@ -49,7 +50,7 @@ North star: surpass Pikafish. Reality check, stated once so the plan stays hones
 - [x] New baseline opponent: greedy material bot alongside the random bot (greedy beats random 8/10 — sanity confirmed)
 - [x] Keep: engine, parser, dataset plumbing, Lightning loop
 
-**Status 2026-07-12 (late):** exit criteria all met — move-match 48.8% ✓ (bar 30%) · vs greedy 85% ✓ (bar 60%) · vs random 96% ✓ (bar 95%), the latter two via the value-head 1-ply rerank bot on the epoch-09 WXF checkpoint. Phase 0 is complete; confirm on the combined-run checkpoint, then Phase 1.
+**Status 2026-07-13: PHASE 0 COMPLETE.** Exit criteria confirmed on the combined 11.7M-position model — move-match 53.1% ✓ (bar 30%) · vs greedy 95% ✓ (bar 60%) · vs random 100% over 50 games ✓ (bar 95%), the match results via the value-head 1-ply rerank bot with repetition penalty. On to Phase 1.
 
 Architecture target: encoder-only, ~91-token input, 8–12 layers, d_model 256–384 (≈10–30M params).
 
@@ -59,7 +60,7 @@ Architecture target: encoder-only, ~91-token input, 8–12 layers, d_model 256�
 **Exit criteria:** SPRT parity with **Pikafish@1k nodes** · playable web demo.
 **Effort:** ~2–3 months part-time. Annotation runs on CPU overnight.
 
-- [x] Pikafish annotation pipeline: UCI wrapper, MultiPV top-k (best move + eval) labels — built, tested (incl. live engine), resumable, shardable across machines (`--start/--end` + `--merge`); ~40 pos/s/core at 10k nodes. Target 1–5M positions: pending the big run
+- [x] Pikafish annotation pipeline: UCI wrapper, MultiPV top-k (best move + eval) labels — built, tested (incl. live engine), resumable, shardable across machines (`--start/--end` + `--merge`); ~40 pos/s/core at 10k nodes. **Done: 3.57M positions** (full WXF cache) in `WXF-pikafish-n10k-full.npz`
 - [ ] Mixed training data: human moves (breadth/style) + engine labels (accuracy) — Tencent used roughly 1:2
 - [ ] MCTS at inference: batched leaf evaluation, **Gumbel root action selection**, 100–800 sims
 - [ ] Eval harness v2 (spec below): Pikafish node-ladder + SPRT match runner
