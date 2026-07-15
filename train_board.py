@@ -10,6 +10,11 @@ and then split with a fixed seed. The default ``--split_by game`` keeps every
 game wholly inside one split (no same-game leakage between train and val/test);
 ``--split_by position`` reproduces the legacy leaky split for resuming runs
 started before game-level splitting existed.
+
+Phase 1 distillation: ``--engine_annotations PGN=NPZ`` mixes engine-best-move
+policy targets (from :mod:`pikafish_annotator` label files) into the train set,
+restricted to train-split games; ``--engine_repeat`` oversamples them to tune
+the human:engine ratio. Val/test stay purely human-labeled.
 """
 
 import argparse
@@ -29,7 +34,27 @@ from elephant_former.data_utils.board_dataset import (
     board_collate_fn,
     split_indices_by_game,
 )
+from elephant_former.data_utils.engine_labels import EngineLabeledDataset, load_annotations
 from elephant_former.training.board_lightning_module import BoardLightningModule
+
+
+def _parse_engine_annotations(args: argparse.Namespace) -> dict:
+    """``--engine_annotations PGN=NPZ`` pairs -> {pgn_path: npz_path}."""
+    if not args.engine_annotations:
+        return {}
+    pairs = {}
+    for spec in args.engine_annotations:
+        pgn, sep, npz = spec.partition("=")
+        if not sep:
+            raise SystemExit(f"--engine_annotations expects PGN=NPZ, got: {spec}")
+        if pgn not in args.pgn_file_path:
+            raise SystemExit(f"--engine_annotations: {pgn} is not among --pgn_file_path")
+        pairs[pgn] = npz
+    if args.split_by != "game":
+        raise SystemExit("--engine_annotations requires --split_by game (train-only leakage rule).")
+    if 0.0 < args.subset_ratio < 1.0:
+        raise SystemExit("--engine_annotations is incompatible with --subset_ratio (row alignment).")
+    return pairs
 
 
 def _make_loader(dataset, args, shuffle: bool):
@@ -63,6 +88,7 @@ def _resolve_resume(args: argparse.Namespace):
 
 def main(args: argparse.Namespace) -> None:
     random.seed(args.split_seed)
+    engine_pairs = _parse_engine_annotations(args)
     resume_ckpt, prev_manifest = _resolve_resume(args)
 
     use_subset = 0.0 < args.subset_ratio < 1.0
@@ -108,14 +134,38 @@ def main(args: argparse.Namespace) -> None:
         train_idx, val_idx, test_idx = split_indices_by_game(
             game_ids, args.test_split_ratio, args.val_split_ratio, args.split_seed
         )
-        train_ds = Subset(dataset, train_idx)
         val_ds = Subset(dataset, val_idx)
         test_ds = Subset(dataset, test_idx)
         num_games = int(game_ids[-1]) + 1 if len(game_ids) else 0
         print(
             f"Game-level split of {num_games} games / {n} positions -> "
-            f"train {len(train_ds)}, val {len(val_ds)}, test {len(test_ds)}."
+            f"train {len(train_idx)}, val {len(val_ds)}, test {len(test_ds)}."
         )
+
+        # Engine-labeled rows join the train mix only, and only for rows whose
+        # game the split assigned to train (an engine label for a val/test-game
+        # position would leak that position into training).
+        train_sets = [Subset(dataset, train_idx)]
+        if engine_pairs:
+            row_offsets = np.cumsum([0] + [len(p) for p in parts])
+            train_mask = np.zeros(n, dtype=bool)
+            train_mask[train_idx] = True
+            for pgn, npz in engine_pairs.items():
+                pi = args.pgn_file_path.index(pgn)
+                part = parts[pi]
+                local_train_rows = np.flatnonzero(
+                    train_mask[row_offsets[pi] : row_offsets[pi + 1]]
+                )
+                annotations = load_annotations(npz, expected_rows=len(part))
+                engine_ds = EngineLabeledDataset(part, annotations, restrict_rows=local_train_rows)
+                print(
+                    f"Engine labels {npz}: {len(engine_ds)} train rows "
+                    f"x{args.engine_repeat} (from {pgn})."
+                )
+                train_sets.extend([engine_ds] * args.engine_repeat)
+        train_ds = ConcatDataset(train_sets) if len(train_sets) > 1 else train_sets[0]
+        if engine_pairs:
+            print(f"Train mix: {len(train_ds)} examples ({len(train_idx)} human-labeled).")
     else:
         n_test = int(n * args.test_split_ratio)
         n_val = int((n - n_test) * args.val_split_ratio)
@@ -137,6 +187,8 @@ def main(args: argparse.Namespace) -> None:
             and prev_manifest.get("val_split_ratio") == args.val_split_ratio
             # Manifests predating game-level splits used the position scheme.
             and prev_manifest.get("split_by", "position") == args.split_by
+            and prev_manifest.get("engine_annotations") == args.engine_annotations
+            and prev_manifest.get("engine_repeat", 1) == args.engine_repeat
             and prev_manifest.get("n_positions") in (None, n)
         )
         if not same_data and not args.allow_dataset_change:
@@ -245,6 +297,17 @@ if __name__ == "__main__":
         "--split_by", type=str, default="game", choices=["game", "position"],
         help="'game' (default) keeps whole games in one split; 'position' is the "
         "legacy leaky split, needed to resume runs started before game-level splits.",
+    )
+    parser.add_argument(
+        "--engine_annotations", type=str, nargs="+", default=None,
+        help="Engine-label files as PGN=NPZ pairs (e.g. data/WXF-41743games.pgns="
+        "data/annotations/WXF-pikafish-n10k-full.npz). Adds engine-best-move policy "
+        "targets for train-split games only. Requires --split_by game.",
+    )
+    parser.add_argument(
+        "--engine_repeat", type=int, default=1,
+        help="Times each engine-labeled set is repeated in the train mix "
+        "(oversampling knob for the human:engine ratio).",
     )
     parser.add_argument("--num_workers", type=int, default=0)
     # Model

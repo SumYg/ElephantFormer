@@ -19,8 +19,11 @@ for status, results, and next steps. Key facts a new session needs:
 - **New pipeline commands** (the legacy sections below still describe the old
   move-history model, which is superseded):
   - Train: `uv run python train_board.py --pgn_file_path data/<file>.pgns [more.pgns] --accelerator gpu`
-    (supports `--resume_from auto`, mid-epoch step checkpoints, multi-PGN concat)
-  - Evaluate vs baselines: `uv run python -m elephant_former.evaluation.board_match --mode model-vs-random|model-vs-greedy|greedy-vs-random --model_path <ckpt>` (add `--rerank [--rerank_top_k K]` for the value-head 1-ply rerank bot — the Phase 0 exit-criteria configuration)
+    (supports `--resume_from auto`, mid-epoch step checkpoints, multi-PGN concat, game-level
+    splits by default — resume pre-split runs with `--split_by position`)
+  - Phase 1 distillation mix: add `--engine_annotations data/<file>.pgns=data/annotations/<labels>.npz [--engine_repeat N]`
+    (engine-best-move policy targets for train-split games only; val/test stay human-labeled)
+  - Evaluate vs baselines: `uv run python -m elephant_former.evaluation.board_match --mode model-vs-random|model-vs-greedy|model-vs-pikafish|greedy-vs-random --model_path <ckpt>` (add `--rerank [--rerank_top_k K] [--repetition_penalty P]` for the value-head 1-ply rerank bot — the Phase 0 exit-criteria configuration; `model-vs-pikafish` takes `--pikafish_nodes N` for node-ladder play)
   - Pikafish annotation (Phase 1 distillation labels): `uv run python -m elephant_former.data_utils.pikafish_annotator --cache_file data/cache/<cache>.npz --out data/annotations/<out>.npz` (supports `--start/--end` sharding and `--merge`)
     - Sharding to a remote **Linux CPU box**: the annotator only needs `pip install numpy rich` — do **not** `uv sync` there (pyproject pins torch to the CUDA wheel index; the annotator uses no torch). Requires Python ≥3.12. The bundled `tools/Linux/pikafish-avx2` needs `libatomic1` (`sudo apt install libatomic1`) and an AVX2-capable CPU (`grep -m1 avx2 /proc/cpuinfo`).
   - Job monitoring: `uv run python scripts/training_status.py` (detached jobs log to `logs/`)

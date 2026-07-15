@@ -1,13 +1,19 @@
-"""Baseline opponents for evaluating the board-state ElephantFormer (Phase 0).
+"""Baseline opponents for evaluating the board-state ElephantFormer.
 
 All bots share a tiny interface: :meth:`Bot.select_move` returns a legal move
 ``(fx, fy, tx, ty)`` for the side to move, or ``None`` when there are none
 (terminal position). Randomness is seeded per bot for reproducible matches.
+
+Includes the Phase 1 reference opponent: :class:`PikafishBot`, Pikafish via UCI
+restricted to a fixed node budget (``go nodes N``) — node-limited play is
+hardware-fair, so results are comparable across machines.
 """
 
 from __future__ import annotations
 
 import random
+import sys
+from pathlib import Path
 from typing import Optional
 
 from elephant_former.engine.elephant_chess_game import (
@@ -109,8 +115,66 @@ class GreedyMaterialBot(Bot):
         return self._rng.choice(legal)
 
 
+def default_engine_path() -> str:
+    """The bundled Pikafish binary for this platform (Windows/Linux avx2)."""
+    sub = "Windows/pikafish-avx2.exe" if sys.platform == "win32" else "Linux/pikafish-avx2"
+    return str(Path("tools") / sub)
+
+
+class PikafishBot(Bot):
+    """Pikafish via UCI at a fixed node budget — the Phase 1 ladder opponent.
+
+    Positions are sent as bare FEN (no move history), so the engine cannot
+    reason about repetitions; fine for ladder play, noted for exactness. If the
+    engine's best move is not legal under our rules engine (rule-set edge
+    cases), the bot falls back to the first legal move and counts the event in
+    ``fallback_moves`` — a nonzero count after a match deserves a look.
+    """
+
+    def __init__(
+        self,
+        engine_path: Optional[str] = None,
+        nnue_path: Optional[str] = "tools/pikafish.nnue",
+        nodes: int = 1000,
+        threads: int = 1,
+        hash_mb: int = 64,
+    ) -> None:
+        # Imported here so the torch-free annotation path stays torch-free and
+        # bots that never use Pikafish don't need the engine binary present.
+        from elephant_former.data_utils.pikafish_annotator import PikafishEngine
+
+        self.name = f"pikafish@{nodes}"
+        self.nodes = nodes
+        self.fallback_moves = 0
+        self._engine = PikafishEngine(
+            engine_path or default_engine_path(),
+            nnue_path=nnue_path,
+            threads=threads,
+            hash_mb=hash_mb,
+            multipv=1,
+        )
+
+    def select_move(self, game: ElephantChessGame) -> Optional[Move]:
+        from elephant_former.data_utils.pikafish_annotator import game_to_fen, uci_to_move
+
+        legal = game.get_all_legal_moves_basic(game.current_player)
+        if not legal:
+            return None
+        best, _ = self._engine.analyze_fen(game_to_fen(game), nodes=self.nodes)
+        if best is not None:
+            move = uci_to_move(best)
+            if move in legal:
+                return move
+        self.fallback_moves += 1
+        print(f"  [pikafish] engine move {best!r} not legal here; falling back (#{self.fallback_moves}).")
+        return legal[0]
+
+    def close(self) -> None:
+        self._engine.close()
+
+
 def make_bot(kind: str, seed: Optional[int] = None) -> Bot:
-    """Factory: ``"random"`` or ``"greedy"``."""
+    """Factory: ``"random"`` or ``"greedy"`` (see :class:`PikafishBot` for the engine)."""
     if kind == "random":
         return RandomBot(seed=seed)
     if kind == "greedy":

@@ -20,7 +20,8 @@ North star: surpass Pikafish. Reality check, stated once so the plan stays hones
 - **Rerank bot** (`board_match --rerank [--rerank_top_k K] [--repetition_penalty P]`): value-head 1-ply rerank with exact mate/stalemate terminal detection and repeats capped at draw score minus a per-occurrence penalty (default 0.1). On the WXF-only ckpt it scored 96%/90% — the config that first met the exit criteria.
 - **Assets**: content-keyed position caches (`data/cache/`: WXF 3.57M + dpxq 8.11M ≈ 11.7M positions), Pikafish + resumable/shardable annotator (`pikafish_annotator.py`, ~40 pos/s/core measured), resume + step-checkpoint + multi-PGN training, job monitor `scripts/training_status.py`, detached jobs logging to `logs/`, value-head 1-ply rerank bot with exact mate/stalemate terminal detection (`board_match --rerank [--rerank_top_k K]`), `ElephantChessGame.copy()` for lookahead/search.
 - **Annotation complete**: the full WXF cache is Pikafish-labeled — 3,569,513/3,569,513 positions at 10k nodes, MultiPV top-k, merged to `data/annotations/WXF-pikafish-n10k-full.npz` (sharded across two VPS workers, x86 + ARM source-built engine, same 2026-01-02 release). Sanity stat: engine best move == human move on **51.1%** of positions — the model's 53.1% move-match is at the human-engine agreement ceiling; the disagreeing half is where distillation gains live.
-- **Next**: Phase 1 — mixed human+engine training data (~1:2 per Tencent), then MCTS at inference (also fixes the two 1-ply blind spots: stalemate traps and slow conversion).
+- **First ladder datapoint** (combined ckpt + rerank vs **Pikafish@256 nodes**): 1W-9L-0D — all losses by checkmate; the one "win" was a perpetual-chase adjudication against the engine, partly an artifact (the ladder bot sends bare FEN, so the engine is repetition-blind — fix by sending move history before trusting chase results). This is the baseline the Elo-vs-N chart starts from.
+- **Next**: Phase 1 — the first mixed human+engine training run (rented GPU; pipeline ready), SPRT + paired-openings runner, then MCTS at inference (also fixes the two 1-ply blind spots: stalemate traps and slow conversion).
 - **Game-level splits done** (`train_board.py --split_by game`, now the default): whole games stay in one split, ending same-game train/val leakage. Boundaries are derived from the cached prev-move flags — existing caches work unchanged, annotation row alignment untouched. Resuming a run started before this needs `--split_by position` (the resume guard says so). Note: val_loss will read *higher* on the next run than leaky-split runs — that's honesty, not regression.
 - Legacy assets still in use: rules engine (`elephant_former/engine/`), PGN/ICCS parser, Lightning conventions.
 
@@ -70,9 +71,9 @@ Architecture target: encoder-only, ~91-token input, 8–12 layers, d_model 256�
 **Effort:** ~2–3 months part-time. Annotation runs on CPU overnight.
 
 - [x] Pikafish annotation pipeline: UCI wrapper, MultiPV top-k (best move + eval) labels — built, tested (incl. live engine), resumable, shardable across machines (`--start/--end` + `--merge`); ~40 pos/s/core at 10k nodes. **Done: 3.57M positions** (full WXF cache) in `WXF-pikafish-n10k-full.npz`
-- [ ] Mixed training data: human moves (breadth/style) + engine labels (accuracy) — Tencent used roughly 1:2
+- [x] Mixed training data pipeline: `train_board.py --engine_annotations PGN=NPZ [--engine_repeat N]` — engine-best-move policy targets (value target stays the human outcome), train-split games only, tested incl. against the real label file. **First mixed run: pending (rented GPU)**
 - [ ] MCTS at inference: batched leaf evaluation, **Gumbel root action selection**, 100–800 sims
-- [ ] Eval harness v2 (spec below): Pikafish node-ladder + SPRT match runner
+- [ ] Eval harness v2 (spec below): node-ladder opponent **done** (`board_match --mode model-vs-pikafish --pikafish_nodes N`, hardware-fair by construction, engine pinned 2026-01-02); paired-opening book + SPRT runner + Elo-vs-N chart still to build
 - [ ] Web demo (already on the README TODO — this is when it becomes worth building)
 
 ## Phase 2 — The strategic investment: throughput

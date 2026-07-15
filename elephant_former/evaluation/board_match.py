@@ -20,7 +20,7 @@ import numpy as np
 import torch
 
 from elephant_former.data_utils import board_features as bf
-from elephant_former.evaluation.baseline_bots import Bot, make_bot
+from elephant_former.evaluation.baseline_bots import Bot, PikafishBot, make_bot
 from elephant_former.engine.elephant_chess_game import ElephantChessGame, Move, Player
 from elephant_former.models.board_transformer import select_move_index
 from elephant_former.training.board_lightning_module import BoardLightningModule
@@ -266,6 +266,14 @@ def _build_bots(args: argparse.Namespace) -> Tuple[Bot, Bot]:
         return _make_model_bot(args), make_bot("random", seed=args.seed)
     if args.mode == "model-vs-greedy":
         return _make_model_bot(args), make_bot("greedy", seed=args.seed)
+    if args.mode == "model-vs-pikafish":
+        pika = PikafishBot(
+            engine_path=args.pikafish_engine,
+            nnue_path=args.pikafish_nnue,
+            nodes=args.pikafish_nodes,
+            threads=args.pikafish_threads,
+        )
+        return _make_model_bot(args), pika
     if args.mode == "greedy-vs-random":
         return make_bot("greedy", seed=args.seed), make_bot("random", seed=args.seed)
     raise ValueError(f"Unknown mode: {args.mode}")
@@ -276,8 +284,12 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         required=True,
-        choices=["model-vs-random", "model-vs-greedy", "greedy-vs-random"],
+        choices=["model-vs-random", "model-vs-greedy", "model-vs-pikafish", "greedy-vs-random"],
     )
+    parser.add_argument("--pikafish_nodes", type=int, default=1000, help="Node budget per engine move.")
+    parser.add_argument("--pikafish_engine", type=str, default=None, help="Engine binary (default: bundled avx2 for this OS).")
+    parser.add_argument("--pikafish_nnue", type=str, default="tools/pikafish.nnue")
+    parser.add_argument("--pikafish_threads", type=int, default=1)
     parser.add_argument("--model_path", type=str, default=None, help="Checkpoint path (required for model modes).")
     parser.add_argument("--num_games", type=int, default=10)
     parser.add_argument("--max_moves", type=int, default=200, help="Move (ply) cap per game.")
@@ -310,13 +322,22 @@ def main() -> None:
 
     bot_a, bot_b = _build_bots(args)
     print(f"Playing {args.num_games} games: {bot_a.name} vs {bot_b.name} (max {args.max_moves} moves/game)")
-    result = play_match(bot_a, bot_b, num_games=args.num_games, max_moves=args.max_moves, verbose=args.verbose)
+    try:
+        result = play_match(bot_a, bot_b, num_games=args.num_games, max_moves=args.max_moves, verbose=args.verbose)
+    finally:
+        for bot in (bot_a, bot_b):
+            close = getattr(bot, "close", None)
+            if close is not None:
+                close()
 
     print("\n--- Match Result ---")
     print(f"{result.bot_a} vs {result.bot_b} over {result.games} games")
     print(f"  {result.bot_a} wins: {result.wins_a} ({result.win_rate_a:.1f}%)")
     print(f"  {result.bot_b} wins: {result.wins_b}")
     print(f"  draws: {result.draws}")
+    for bot in (bot_a, bot_b):
+        if getattr(bot, "fallback_moves", 0):
+            print(f"  note: {bot.name} used {bot.fallback_moves} fallback move(s) (engine move not legal under our rules).")
 
 
 if __name__ == "__main__":
