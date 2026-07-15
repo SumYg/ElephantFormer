@@ -52,6 +52,15 @@ North star: surpass Pikafish. Reality check, stated once so the plan stays hones
 
 **Status 2026-07-13: PHASE 0 COMPLETE.** Exit criteria confirmed on the combined 11.7M-position model — move-match 53.1% ✓ (bar 30%) · vs greedy 95% ✓ (bar 60%) · vs random 100% over 50 games ✓ (bar 95%), the match results via the value-head 1-ply rerank bot with repetition penalty. On to Phase 1.
 
+**Phase 0 findings (decision-relevant, for future sessions):**
+
+1. Representation >> everything else: board-state encoder took move-match 12.49% → 48.8%; no later change came close. Data scaling 3.57M → 11.7M added 48.8% → 53.1% and raw-policy win rates 76% → 95/90% — the curve hasn't flattened, so more data is still worth buying.
+2. **Move-match vs humans is exhausted as a metric**: Pikafish agrees with humans on only 51.1% of positions and the model sits at 53.1% — at the ceiling. Progress is only measurable against engine references from here (hence eval harness v2).
+3. Tiny search leverages a weak value head enormously: 60% value accuracy + exact terminal checks + 1-ply rerank ≈ +20 points win rate. Expect MCTS (100–800 evals/move) to compound this.
+4. Deterministic argmax play self-defeats under adjudication (cycles → chase losses); any deterministic bot needs repetition awareness (`--repetition_penalty`). Known 1-ply blind spots: stalemate traps and slow conversion — both are search problems, not model problems.
+5. **Measurement bugs cost more than model bugs**: engine legality (skip 63% → 0.05%), stalemate adjudication (困毙), and leaky position-level splits each silently distorted every number produced under them. Budget real effort for eval correctness; don't compare metrics across those boundaries (e.g. leaky-split val_loss vs game-split val_loss).
+6. Infra that paid off unplanned: content-keyed caches (free VPS sharding), prev-move flags (free game-boundary recovery for splits), pinned engine release (label consistency across x86/ARM workers). Keep making format decisions conservatively rich.
+
 Architecture target: encoder-only, ~91-token input, 8–12 layers, d_model 256–384 (≈10–30M params).
 
 ## Phase 1 — Distillation + search
