@@ -22,6 +22,7 @@ import torch
 from elephant_former.data_utils import board_features as bf
 from elephant_former.evaluation.baseline_bots import Bot, PikafishBot, make_bot
 from elephant_former.engine.elephant_chess_game import ElephantChessGame, Move, Player
+from elephant_former.inference.mcts import MCTS
 from elephant_former.models.board_transformer import select_move_index
 from elephant_former.training.board_lightning_module import BoardLightningModule
 
@@ -176,6 +177,48 @@ class ValueRerankBot(ModelBot):
         return legal[candidates[best]]
 
 
+class MCTSBot(ModelBot):
+    """Bot that picks moves with MCTS over the model's policy + value heads.
+
+    ``num_simulations`` is the per-move search budget; ``gumbel_scale = 0``
+    (default) keeps play deterministic for evaluation matches. See
+    :mod:`elephant_former.inference.mcts` for the search itself.
+    """
+
+    def __init__(
+        self,
+        model_path: Optional[str] = None,
+        device: str = "cpu",
+        num_simulations: int = 200,
+        root_top_m: int = 16,
+        c_puct: float = 1.5,
+        gumbel_scale: float = 0.0,
+        seed: Optional[int] = None,
+        module: Optional[BoardLightningModule] = None,
+    ) -> None:
+        super().__init__(
+            model_path=model_path, device=device, temperature=0.0, seed=seed, module=module
+        )
+        self.name = f"model-mcts{num_simulations}"
+        self._mcts = MCTS(
+            self._forward_features,
+            num_simulations=num_simulations,
+            root_top_m=root_top_m,
+            c_puct=c_puct,
+            gumbel_scale=gumbel_scale,
+            seed=seed,
+        )
+
+    def select_move(self, game: ElephantChessGame) -> Optional[Move]:
+        legal = game.get_all_legal_moves_basic(game.current_player)
+        if not legal:
+            return None
+        if len(legal) == 1:
+            return legal[0]
+        move, _ = self._mcts.search(game)
+        return move
+
+
 @dataclass
 class MatchResult:
     """Aggregate result of a match from the first bot's perspective."""
@@ -262,6 +305,16 @@ def play_match(
 
 
 def _make_model_bot(args: argparse.Namespace) -> Bot:
+    if args.mcts_sims > 0 and args.rerank:
+        raise SystemExit("--mcts_sims and --rerank are mutually exclusive (MCTS supersedes the 1-ply rerank).")
+    if args.mcts_sims > 0:
+        return MCTSBot(
+            args.model_path,
+            device=args.device,
+            num_simulations=args.mcts_sims,
+            root_top_m=args.mcts_top_m,
+            seed=args.seed,
+        )
     if args.rerank:
         return ValueRerankBot(
             args.model_path,
@@ -324,6 +377,18 @@ def main() -> None:
         default=0.1,
         help="Rerank score penalty per prior occurrence of the resulting position "
         "(repeats are also capped at a draw score; 0 disables).",
+    )
+    parser.add_argument(
+        "--mcts_sims",
+        type=int,
+        default=0,
+        help="Use MCTS with this simulation budget per move (0 = off; excludes --rerank).",
+    )
+    parser.add_argument(
+        "--mcts_top_m",
+        type=int,
+        default=16,
+        help="Root candidates for Gumbel sequential halving.",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--verbose", action="store_true")

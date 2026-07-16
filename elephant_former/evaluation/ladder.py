@@ -32,7 +32,7 @@ from typing import List, Optional, Sequence, Tuple
 from elephant_former.data_utils.tokenization_utils import parse_iccs_move_to_coords
 from elephant_former.engine.elephant_chess_game import Move, Player
 from elephant_former.evaluation.baseline_bots import Bot, PikafishBot
-from elephant_former.evaluation.board_match import ModelBot, ValueRerankBot, play_game
+from elephant_former.evaluation.board_match import MCTSBot, ModelBot, ValueRerankBot, play_game
 
 
 def load_opening_book(path: str | Path) -> List[List[Move]]:
@@ -174,6 +174,8 @@ def main() -> None:
     parser.add_argument("--rerank", action="store_true", help="Use the value-head 1-ply rerank bot.")
     parser.add_argument("--rerank_top_k", type=int, default=0)
     parser.add_argument("--repetition_penalty", type=float, default=0.1)
+    parser.add_argument("--mcts_sims", type=int, default=0, help="Use MCTS with this budget per move (0 = off).")
+    parser.add_argument("--mcts_top_m", type=int, default=16)
     parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda", "mps"])
     parser.add_argument("--nodes", type=int, nargs="+", default=[256], help="Ladder rungs (one match per value).")
     parser.add_argument("--num_games", type=int, default=40, help="Games per rung (rounded down to even).")
@@ -192,8 +194,17 @@ def main() -> None:
     book = load_opening_book(args.book)
     print(f"Loaded {len(book)} openings from {args.book}.")
 
-    if args.rerank:
-        model_bot: Bot = ValueRerankBot(
+    if args.mcts_sims > 0 and args.rerank:
+        raise SystemExit("--mcts_sims and --rerank are mutually exclusive.")
+    if args.mcts_sims > 0:
+        model_bot: Bot = MCTSBot(
+            args.model_path,
+            device=args.device,
+            num_simulations=args.mcts_sims,
+            root_top_m=args.mcts_top_m,
+        )
+    elif args.rerank:
+        model_bot = ValueRerankBot(
             args.model_path,
             device=args.device,
             top_k=args.rerank_top_k,
@@ -219,7 +230,9 @@ def main() -> None:
             verbose=args.verbose,
         )
         record["model_path"] = args.model_path
-        record["bot"] = "rerank" if args.rerank else "policy"
+        record["bot"] = (
+            f"mcts{args.mcts_sims}" if args.mcts_sims > 0 else ("rerank" if args.rerank else "policy")
+        )
         print(
             f"nodes={record['nodes']}: {record['wins']}W-{record['losses']}L-{record['draws']}D "
             f"over {record['games']} games | score {record['score']:.1%} | "
