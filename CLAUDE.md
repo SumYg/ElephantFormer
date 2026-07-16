@@ -26,6 +26,7 @@ for status, results, and next steps. Key facts a new session needs:
   - Evaluate vs baselines: `uv run python -m elephant_former.evaluation.board_match --mode model-vs-random|model-vs-greedy|model-vs-pikafish|greedy-vs-random --model_path <ckpt>` (add `--rerank [--rerank_top_k K] [--repetition_penalty P]` for the value-head 1-ply rerank bot — the Phase 0 exit-criteria configuration; `model-vs-pikafish` takes `--pikafish_nodes N` for node-ladder play)
   - Pikafish annotation (Phase 1 distillation labels): `uv run python -m elephant_former.data_utils.pikafish_annotator --cache_file data/cache/<cache>.npz --out data/annotations/<out>.npz` (supports `--start/--end` sharding and `--merge`)
     - Sharding to a remote **Linux CPU box**: the annotator only needs `pip install numpy rich` — do **not** `uv sync` there (pyproject pins torch to the CUDA wheel index; the annotator uses no torch). Requires Python ≥3.12. The bundled `tools/Linux/pikafish-avx2` needs `libatomic1` (`sudo apt install libatomic1`) and an AVX2-capable CPU (`grep -m1 avx2 /proc/cpuinfo`).
+  - Elo ladder vs Pikafish: `uv run python -m elephant_former.evaluation.ladder --model_path <ckpt> --rerank --nodes 256 1024 --num_games 40` (paired openings from `data/openings_wxf_top100.json`, optional `--sprt`, appends JSONL to `logs/ladder.jsonl`)
   - Job monitoring: `uv run python scripts/training_status.py` (detached jobs log to `logs/`)
 - **Position caches** live in `data/cache/*.npz`, keyed by PGN *content* (portable
   across machines).

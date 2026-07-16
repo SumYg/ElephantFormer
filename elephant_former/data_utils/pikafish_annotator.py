@@ -169,9 +169,22 @@ class PikafishEngine:
             if line.startswith(token):
                 return lines
 
-    def analyze_fen(self, fen: str, nodes: int = 10000) -> Tuple[Optional[str], List[PvLine]]:
-        """Search a position; returns (bestmove or None if mated/stalled, PV lines)."""
-        self._send(f"position fen {fen}")
+    def analyze_fen(
+        self,
+        fen: str,
+        nodes: int = 10000,
+        moves: Optional[Sequence[str]] = None,
+    ) -> Tuple[Optional[str], List[PvLine]]:
+        """Search a position; returns (bestmove or None if mated/stalled, PV lines).
+
+        ``moves`` (UCI strings) are appended as ``position fen ... moves ...`` so
+        the engine sees the game history — required for it to reason about
+        repetitions instead of treating every position as fresh.
+        """
+        cmd = f"position fen {fen}"
+        if moves:
+            cmd += " moves " + " ".join(moves)
+        self._send(cmd)
         self._send(f"go nodes {nodes}")
         lines = self._read_until("bestmove")
         pvs = parse_info_lines(lines)

@@ -193,11 +193,23 @@ class MatchResult:
 
 
 def play_game(
-    red_bot: Bot, black_bot: Bot, max_moves: int = 200
+    red_bot: Bot,
+    black_bot: Bot,
+    max_moves: int = 200,
+    opening: Optional[Sequence[Move]] = None,
 ) -> Tuple[Optional[str], Optional[Player]]:
-    """Play a single game; return ``(status, winner)`` (winner ``None`` on draw)."""
+    """Play a single game; return ``(status, winner)`` (winner ``None`` on draw).
+
+    ``opening`` moves are applied (and legality-checked) before the bots take
+    over, enabling paired games from a book; opening plies count toward
+    ``max_moves``.
+    """
     game = ElephantChessGame()
-    for _ in range(max_moves):
+    for move in opening or ():
+        if move not in game.get_all_legal_moves_basic(game.current_player):
+            raise ValueError(f"Opening move {move} is not legal in its position.")
+        game.apply_move(move)
+    for _ in range(max_moves - len(opening or ())):
         mover = game.current_player
         bot = red_bot if mover == Player.RED else black_bot
         move = bot.select_move(game)

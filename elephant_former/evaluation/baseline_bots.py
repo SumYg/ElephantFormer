@@ -124,11 +124,12 @@ def default_engine_path() -> str:
 class PikafishBot(Bot):
     """Pikafish via UCI at a fixed node budget — the Phase 1 ladder opponent.
 
-    Positions are sent as bare FEN (no move history), so the engine cannot
-    reason about repetitions; fine for ladder play, noted for exactness. If the
-    engine's best move is not legal under our rules engine (rule-set edge
-    cases), the bot falls back to the first legal move and counts the event in
-    ``fallback_moves`` — a nonzero count after a match deserves a look.
+    Positions are sent as the game's initial FEN plus the full UCI move
+    history, so the engine can reason about repetitions (games here always
+    start from the standard initial position). If the engine's best move is not
+    legal under our rules engine (rule-set edge cases), the bot falls back to
+    the first legal move and counts the event in ``fallback_moves`` — a nonzero
+    count after a match deserves a look.
     """
 
     def __init__(
@@ -155,12 +156,14 @@ class PikafishBot(Bot):
         )
 
     def select_move(self, game: ElephantChessGame) -> Optional[Move]:
-        from elephant_former.data_utils.pikafish_annotator import game_to_fen, uci_to_move
+        from elephant_former.data_utils.pikafish_annotator import move_to_uci, uci_to_move
+        from elephant_former.engine.elephant_chess_game import INITIAL_BOARD_FEN
 
         legal = game.get_all_legal_moves_basic(game.current_player)
         if not legal:
             return None
-        best, _ = self._engine.analyze_fen(game_to_fen(game), nodes=self.nodes)
+        history = [move_to_uci(m) for m in game.move_history]
+        best, _ = self._engine.analyze_fen(INITIAL_BOARD_FEN, nodes=self.nodes, moves=history)
         if best is not None:
             move = uci_to_move(best)
             if move in legal:
