@@ -17,8 +17,9 @@ Search wraps the policy (priors) and value head (leaf evaluation) of a trained
   ``gumbel_scale = 0`` (the default) play is deterministic — right for eval
   matches; nonzero scale gives the sampling behaviour self-play wants.
 * Below the root, plain PUCT with unvisited children initialised to 0.5.
-
-Leaf evaluations within a halving round are batched through the network.
+* Descents run in batches (one per surviving root action) marked with a
+  virtual loss so simultaneous paths diversify; each batch's leaves share one
+  forward pass through the network.
 """
 
 from __future__ import annotations
@@ -168,20 +169,45 @@ class MCTS:
                 best_index, best_score = idx, score
         return best_index
 
-    def _simulate_from(self, root_child: Node) -> float:
-        """One descent starting below a root child; returns its backed-up value
-        **from the root child's side-to-move perspective**."""
+    def _descend(self, root_child: Node) -> List[Node]:
+        """Select one path below ``root_child``, marking it with a virtual loss.
+
+        The virtual loss (``visits += 1``, ``value_sum += 1`` in each node's own
+        view) makes every node on the path look winning *for itself* and hence
+        unattractive to its parent, steering subsequent descents in the same
+        batch onto different lines. It is unwound before the real backup.
+        """
         path = [root_child]
         node = root_child
         while node.expanded and node.terminal_value is None:
             node = self._child(node, self._select_puct(node))
             path.append(node)
-        value = self._evaluate_batch([node])[0]
-        # Back up along the path; ``value`` is for path[-1]'s side to move.
+        for visited in path:
+            visited.visits += 1
+            visited.value_sum += 1.0
+        return path
+
+    def _backup(self, path: List[Node], value: float) -> None:
+        """Undo the path's virtual loss, then back ``value`` up the path.
+
+        ``value`` is for the side to move at ``path[-1]``.
+        """
+        for visited in path:
+            visited.visits -= 1
+            visited.value_sum -= 1.0
         for depth, visited in enumerate(reversed(path)):
             visited.visits += 1
             visited.value_sum += value if depth % 2 == 0 else 1.0 - value
-        return path[0].q
+
+    def _simulate_batch(self, root_children: Sequence[Node]) -> None:
+        """One descent per entry of ``root_children``, leaf-evaluated together."""
+        paths = [self._descend(child) for child in root_children]
+        # Two paths can end at the same node; evaluate each leaf once.
+        unique: Dict[int, Node] = {id(p[-1]): p[-1] for p in paths}
+        leaves = list(unique.values())
+        values = dict(zip(unique.keys(), self._evaluate_batch(leaves)))
+        for path in paths:
+            self._backup(path, values[id(path[-1])])
 
     # ---- root: Gumbel sequential halving -----------------------------------------
 
@@ -220,13 +246,13 @@ class MCTS:
         rounds = max(1, math.ceil(math.log2(m)))
         while len(survivors) > 1:
             per_action = max(1, budget // (rounds * len(survivors))) if budget > 0 else 0
-            for idx in survivors:
-                child = self._child(root, idx)
-                for _ in range(per_action):
-                    if budget <= 0:
-                        break
-                    self._simulate_from(child)
-                    budget -= 1
+            # One descent per survivor forms a leaf batch; repeat per_action times.
+            for _ in range(per_action):
+                if budget <= 0:
+                    break
+                batch = [self._child(root, i) for i in survivors[: max(1, min(len(survivors), budget))]]
+                self._simulate_batch(batch)
+                budget -= len(batch)
             max_visits = max(self._child(root, i).visits for i in survivors)
 
             def rank(i: int) -> float:
