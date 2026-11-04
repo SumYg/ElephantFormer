@@ -170,7 +170,12 @@ def run_rung(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Model vs Pikafish node-ladder with paired openings.")
-    parser.add_argument("--model_path", type=str, required=True)
+    parser.add_argument(
+        "--model_path",
+        type=str,
+        required=True,
+        help="Exported .safetensors weights, or a .ckpt you trust (it is unpickled).",
+    )
     parser.add_argument("--rerank", action="store_true", help="Use the value-head 1-ply rerank bot.")
     parser.add_argument("--rerank_top_k", type=int, default=0)
     parser.add_argument("--repetition_penalty", type=float, default=0.1)

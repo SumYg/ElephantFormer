@@ -22,6 +22,7 @@ import torch
 from elephant_former.data_utils import board_features as bf
 from elephant_former.evaluation.baseline_bots import Bot, PikafishBot, make_bot
 from elephant_former.engine.elephant_chess_game import ElephantChessGame, Move, Player
+from elephant_former.inference.board_weights import load_board_module
 from elephant_former.inference.mcts import MCTS
 from elephant_former.models.board_transformer import select_move_index
 from elephant_former.training.board_lightning_module import BoardLightningModule
@@ -44,9 +45,7 @@ class ModelBot(Bot):
         if module is None:
             if model_path is None:
                 raise ValueError("Either model_path or module is required.")
-            module = BoardLightningModule.load_from_checkpoint(
-                checkpoint_path=model_path, map_location=self.device
-            )
+            module = load_board_module(model_path, device=self.device)
         self.model = module
         self.model.to(self.device)
         self.model.eval()
@@ -355,7 +354,12 @@ def main() -> None:
     parser.add_argument("--pikafish_engine", type=str, default=None, help="Engine binary (default: bundled avx2 for this OS).")
     parser.add_argument("--pikafish_nnue", type=str, default="tools/pikafish.nnue")
     parser.add_argument("--pikafish_threads", type=int, default=1)
-    parser.add_argument("--model_path", type=str, default=None, help="Checkpoint path (required for model modes).")
+    parser.add_argument(
+        "--model_path",
+        type=str,
+        default=None,
+        help="Exported .safetensors weights, or a .ckpt you trust (it is unpickled). Required for model modes.",
+    )
     parser.add_argument("--num_games", type=int, default=10)
     parser.add_argument("--max_moves", type=int, default=200, help="Move (ply) cap per game.")
     parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda", "mps"])
