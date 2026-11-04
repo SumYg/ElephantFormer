@@ -27,6 +27,8 @@ for status, results, and next steps. Key facts a new session needs:
   - Pikafish annotation (Phase 1 distillation labels): `uv run python -m elephant_former.data_utils.pikafish_annotator --cache_file data/cache/<cache>.npz --out data/annotations/<out>.npz` (supports `--start/--end` sharding and `--merge`)
     - Sharding to a remote **Linux CPU box**: the annotator only needs `pip install numpy rich` — do **not** `uv sync` there (pyproject pins torch to the CUDA wheel index; the annotator uses no torch). Requires Python ≥3.12. The bundled `tools/Linux/pikafish-avx2` needs `libatomic1` (`sudo apt install libatomic1`) and an AVX2-capable CPU (`grep -m1 avx2 /proc/cpuinfo`).
   - Elo ladder vs Pikafish: `uv run python -m elephant_former.evaluation.ladder --model_path <ckpt> --rerank --nodes 256 1024 --num_games 40` (paired openings from `data/openings_wxf_top100.json`, optional `--sprt`, appends JSONL to `logs/ladder.jsonl`)
+  - Export shareable weights: `uv run python -m elephant_former.inference.board_weights --ckpt <ckpt> [--out <file>.safetensors]`.
+    A `.ckpt` is a pickle, and loading one runs any code inside it (Lightning advisories CVE-2026-31221 and CVE-2026-58659, the latter even with `weights_only=True`). Only load `.ckpt` files you made yourself; share and accept models only as `.safetensors`. `--model_path` in `board_match`/`ladder` accepts either format.
   - Job monitoring: `uv run python scripts/training_status.py` (detached jobs log to `logs/`)
 - **Position caches** live in `data/cache/*.npz`, keyed by PGN *content* (portable
   across machines).
