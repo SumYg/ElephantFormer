@@ -9,20 +9,26 @@ North star: surpass Pikafish. Reality check, stated once so the plan stays hones
 - Distilling from any teacher caps below the teacher. Self-play RL is the only method with no ceiling.
 - Pikafish examines ~10⁷ exact positions per move; a forward pass examines one. Params buy the *head* of the position distribution (patterns), search nodes buy the *tail* (exact calculation). Every frontier engine ships both.
 - Nobody has dethroned a Stockfish-family engine solo. Passing full Pikafish is a community-project outcome (the "Lc0 of xiangqi" path). Everything below is sequenced so that each phase has standalone value even if the project stops there.
+- **Direction review (2026-10-25):** that "Lc0 of xiangqi" already exists — **px0** (Pika Xiangqi Zero, from the Pikafish org), and its self-play data is public (`px0data` on Kaggle, ODbL). So the working goal is now to *climb the Elo-vs-N chart with a small, open model* trained on px0's data, not to build a parallel self-play pipeline. Phases 2–4 are deferred; if raw strength becomes the goal, contributing to px0 beats rebuilding it.
 
 **Headline metric:** Elo vs Pikafish restricted to N nodes. One chart: N on the x-axis, our Elo relative to Pikafish@N on the y-axis, one curve per model generation. Climbing N is the whole game.
 
-## Current state (updated 2026-07-13)
+## Current state (updated 2026-11-05)
 
 - **Engine legality fixed** (stale-board attack test in `is_square_attacked_by`; mate-avoidance heuristic removed from `get_all_legal_moves`). All pre-fix results — the old 46.2% win rate, the README's sequence-length findings — are unreliable. Skip rate on real games went 63% → 0.05%.
-- **Phase 0 complete, confirmed on the combined model** (WXF + dpxq, 11.7M positions, 10 epochs, single consumer GPU): test policy accuracy **53.1%** (WXF-only: 48.8%; legacy model: 12.49%), value accuracy 60.5%, best ckpt `board-combined/board_former-epoch=09-val_loss=1.831.ckpt`.
+- **Phase 0 complete, confirmed on the combined model** (WXF + dpxq, 11.7M positions, 10 epochs, single consumer GPU): test policy accuracy **53.1%** (WXF-only: 48.8%; legacy model: 12.49%), value accuracy 60.5%, best ckpt `board-combined/board_former-epoch=09-val_loss=1.831.ckpt`. These accuracies come from the old position-level split (the run's args show `split_by: position`), which put positions from the same game in both train and test; re-measure on a game-level split before comparing new models against them.
 - **Scoreboard** (combined ckpt): **rerank vs random 100%** (50-0-0, bar 95%) · **rerank vs greedy 95%** (19-1-0, bar 60%; the one loss a stalemate — 1-ply can't see being boxed in, a search concern) · raw policy vs random 95% / vs greedy 90% (raw losses are all perpetual-chase cycles; the rerank bot's `--repetition_penalty` fixes those). Data scaling alone lifted the raw policy from 76% to ~95/90%.
 - **Rerank bot** (`board_match --rerank [--rerank_top_k K] [--repetition_penalty P]`): value-head 1-ply rerank with exact mate/stalemate terminal detection and repeats capped at draw score minus a per-occurrence penalty (default 0.1). On the WXF-only ckpt it scored 96%/90% — the config that first met the exit criteria.
 - **MCTS bot** (`--mcts_sims N`, combined ckpt): **10-0-0 vs greedy at 200 sims, all checkmates** — no stalemate-trap loss, no move-cap draws; both 1-ply blind spots close in real play. 2.1 s/move on CPU at 200 sims with batched descents (virtual loss); the remaining per-move cost is Python movegen (Phase 2).
 - **Assets**: content-keyed position caches (`data/cache/`: WXF 3.57M + dpxq 8.11M ≈ 11.7M positions), Pikafish + resumable/shardable annotator (`pikafish_annotator.py`, ~40 pos/s/core measured), resume + step-checkpoint + multi-PGN training, job monitor `scripts/training_status.py`, detached jobs logging to `logs/`, value-head 1-ply rerank bot with exact mate/stalemate terminal detection (`board_match --rerank [--rerank_top_k K]`), `ElephantChessGame.copy()` for lookahead/search.
 - **Annotation complete**: the full WXF cache is Pikafish-labeled — 3,569,513/3,569,513 positions at 10k nodes, MultiPV top-k, merged to `data/annotations/WXF-pikafish-n10k-full.npz` (sharded across two VPS workers, x86 + ARM source-built engine, same 2026-01-02 release). Sanity stat: engine best move == human move on **51.1%** of positions — the model's 53.1% move-match is at the human-engine agreement ceiling; the disagreeing half is where distillation gains live.
-- **Ladder baseline** (combined ckpt + rerank, paired openings, repetition-aware engine): vs **Pikafish@256** = **0W-40L-0D, Elo ≤ −712** (95% bound; all checkmates, 0 rules disagreements in 40 games). The model is below the 256-node rung; lower rungs (1–128 nodes) queued to find the measurable part of the curve. An earlier 1W-9L probe was flattered by engine repetition-blindness (bare FEN, since fixed).
-- **Next**: Phase 1 — the first mixed human+engine training run (rented GPU; pipeline ready), SPRT + paired-openings runner, then MCTS at inference (also fixes the two 1-ply blind spots: stalemate traps and slow conversion).
+- **Ladder** (combined ckpt, 40 paired games per rung, refereed harness — see Phase 1): search is where the strength is. **MCTS-800 vs Pikafish@1024: 24W-10L-6D, +127 Elo [95% CI +30, +249]** (2026-11-04). MCTS-200: +301 [+186, +531] @1 (really ~50 nodes, depth 2), +147 [+47, +280] @256, −61 [−169, +35] @1024, so parity ≈ 680 nodes. On the same openings and colours, 4× sims (200 → 800) gained +188 Elo, about what Pikafish gains per 4× nodes in this range (~208); extrapolated, MCTS-800 is level with Pikafish at ~2.4k nodes (rough). The rerank bot is off the chart (0-40 @256, 0-32 @1). The refereed rungs had 0 rules disagreements with Pikafish and 0 engine fallbacks. MCTS-800 costs ~3 s/move on GPU.
+- **Next** (from the 2026-10 direction review):
+  1. **Formal Phase 1 gate**: SPRT(0, 20) for MCTS-800 @1024. The 40 games give LLR 1.02 of the 2.94 needed; at the same score it passes around game 116 (~6.5 h).
+  2. **Soft targets**: train on probability targets for the policy (visit / MultiPV distributions) and the value (WDL), and use the Pikafish MultiPV evals already on disk as value targets in the pending mixed run. The pipeline currently uses only the engine's best move, with the human result as the value target.
+  3. **px0data converter**: download px0data (needs a Kaggle login) and convert its Lc0 V6 records: px0's 2062-move policy → our 8100 from→to indices, undo the side-to-move board flip, recompute legal-move features with our engine. A round-trip test against the rules engine comes before any training.
+  4. **Re-measure the Phase 0 model on a game-level split**, then train on px0 data and SPRT each new model against it.
+  Open questions: px0's real strength, px0data's position count, and what attribution ODbL requires for published models.
 - **Game-level splits done** (`train_board.py --split_by game`, now the default): whole games stay in one split, ending same-game train/val leakage. Boundaries are derived from the cached prev-move flags — existing caches work unchanged, annotation row alignment untouched. Resuming a run started before this needs `--split_by position` (the resume guard says so). Note: val_loss will read *higher* on the next run than leaky-split runs — that's honesty, not regression.
 - Legacy assets still in use: rules engine (`elephant_former/engine/`), PGN/ICCS parser, Lightning conventions.
 
@@ -70,14 +76,21 @@ Architecture target: encoder-only, ~91-token input, 8–12 layers, d_model 256�
 **Goal:** real strength from free teachers.
 **Exit criteria:** SPRT parity with **Pikafish@1k nodes** · playable web demo.
 **Effort:** ~2–3 months part-time. Annotation runs on CPU overnight.
+**Data source (2026-10 review):** px0's self-play records carry a full MCTS visit policy, the search's WDL estimate and the game result for every position — better targets than one Pikafish best move plus the human result. The distillation lane now centres on px0data; the existing Pikafish annotations feed the pending run as soft targets.
 
 - [x] Pikafish annotation pipeline: UCI wrapper, MultiPV top-k (best move + eval) labels — built, tested (incl. live engine), resumable, shardable across machines (`--start/--end` + `--merge`); ~40 pos/s/core at 10k nodes. **Done: 3.57M positions** (full WXF cache) in `WXF-pikafish-n10k-full.npz`
 - [x] Mixed training data pipeline: `train_board.py --engine_annotations PGN=NPZ [--engine_repeat N]` — engine-best-move policy targets (value target stays the human outcome), train-split games only, tested incl. against the real label file. **First mixed run: pending (rented GPU)**
 - [x] MCTS at inference: **Gumbel sequential halving** at the root (deterministic at `gumbel_scale 0` for eval; noise ready for self-play), PUCT below, exact in-tree terminals (mate/困毙 = loss, 3-fold repetition = draw), root-round batched leaf evaluation — `board_match`/`ladder` `--mcts_sims N [--mcts_top_m M]`. Verified: finds mate-in-1, avoids mate-in-2 traps that 1-ply provably cannot (tests/test_board_mcts.py). Descents now batched with virtual loss (2.1 s/move at 200 sims on CPU, was ~3.5; remaining cost is Python movegen — the Phase 2 story)
 - [x] Eval harness v2 (spec below): **ladder runner done** — `python -m elephant_former.evaluation.ladder --model_path <ckpt> [--rerank] --nodes 256 1024 ... --num_games N [--sprt --elo0 0 --elo1 20]`; paired games from `data/openings_wxf_top100.json` (top 6-ply prefixes, 69% corpus coverage, rebuild with `scripts/build_opening_book.py`), trinomial GSPRT, Elo ± 95% CI, JSONL records to `logs/ladder.jsonl`; engine now sees full move history (repetition-aware). Elo-vs-N chart: `uv run python scripts/plot_ladder.py` renders `logs/ladder.jsonl` → `logs/ladder_elo_vs_nodes.png` (one series per generation+bot, 95% CIs, floor datapoints flagged)
+- [x] **Refereed ladder**: `--games_out` writes one JSON line per game (full move list, raw and adjudicated result, referee audit). A separate Pikafish referee cross-checks every final position's legal moves (`go perft 1`) against our rules engine, and adjudicates move-capped games from a 1M-node eval (`--adjudicate_nodes`; a win needs ≥ `--adjudicate_cp` 300 or a mate score, else a draw). `--pikafish_wsl <distro>` runs the Linux build inside WSL for Windows hosts whose app-control policy blocks the unsigned .exe (replay-verified identical to the Windows build)
+- [ ] SPRT gate: MCTS-800 @1024 (40-game result in Current state; formal run pending)
+- [ ] Soft policy/value targets (visit / MultiPV distributions, WDL), incl. Pikafish evals as value targets
+- [ ] px0data converter + round-trip test; first px0-trained model, SPRT'd against the current one
 - [ ] Web demo (already on the README TODO — this is when it becomes worth building)
 
 ## Phase 2 — The strategic investment: throughput
+
+**Deferred, with Phases 3–4 (2026-10 review):** px0 already runs a public xiangqi self-play pipeline (shared server, 295 networks). A comparable from-scratch effort in chess (Braun 2026: a 6.32M-param model reaching ~3250 Elo at 100k nodes) took ~480 GPU-hours plus heavy C++/TensorRT engineering. If raw strength becomes the goal, contributing to px0 beats building a parallel setup.
 
 **Goal:** self-play data generation stops being the bottleneck. Gates all RL.
 **Exit criteria:** ≥10⁵ moves/sec on one GPU (JAX lane) or ≥10⁴ games/hour (C++ lane) · perft suite passes vs both the Python engine and pyffish.
@@ -121,7 +134,8 @@ Recommendation: **A first** (cheaper to debug, proven on xiangqi specifically), 
 - Opponent: Pikafish via UCI `go nodes N`, ladder N ∈ {256, 1k, 4k, 16k, 64k, 256k, 1M}
 - Paired games (both colors) from a curated ~100-opening book
 - **SPRT** (elo0=0, elo1=20, α=β=0.05) for regression gates; 400-game fixed matches for ladder datapoints; always report Elo ± CI
-- Draw adjudication: move cap + engine-checked chase rules
+- Referee: Pikafish perft cross-check of every final position; move-capped games adjudicated by a 1M-node eval (≥300 cp or mate), else drawn. Chase verdicts still come from our engine — audit them in the game records when a rung is close
+- Pin the Pikafish build (2026-01-02 release; a 2026-09-06 release exists) so ladder results stay comparable
 - Cheap per-checkpoint proxies: move-match accuracy split by game phase (opening/middle/end), value-head MSE vs outcomes, policy top-k overlap with Pikafish
 - Artifact: the Elo-vs-N chart, updated per model generation
 
@@ -149,3 +163,6 @@ Recommendation: **A first** (cheaper to debug, proven on xiangqi specifically), 
 - [Scaling Scaling Laws with Board Games — arXiv:2104.03113](https://arxiv.org/abs/2104.03113) (train-compute ↔ test-compute exchange rate)
 - [KataGo: Accelerating Self-Play Learning in Go — arXiv:1902.10565](https://arxiv.org/abs/1902.10565)
 - Pikafish — [GitHub](https://github.com/official-pikafish/Pikafish) · pyffish — [Fairy-Stockfish bindings](https://github.com/fairy-stockfish/Fairy-Stockfish)
+- px0 (Pika Xiangqi Zero) — [GitHub](https://github.com/official-pikafish/px0) · [px0data on Kaggle](https://www.kaggle.com/datasets/pikacat/px0data) · [zyk17/x7](https://github.com/zyk17/x7) (third-party reader for its Lc0 V6 records)
+- [Engineering Efficient Self-Play Chess — arXiv:2609.37447](https://arxiv.org/abs/2609.37447) (Braun 2026: the cost of from-scratch self-play at our model size)
+- [Beyond Search-Imitation — arXiv:2608.27757](https://arxiv.org/abs/2608.27757) (RL fine-tuning a searchless model: puzzle accuracy up, playing strength flat)
