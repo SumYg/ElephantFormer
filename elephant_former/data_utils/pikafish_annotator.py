@@ -19,10 +19,11 @@ y=0, side to move is ``w`` for Red.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -117,6 +118,29 @@ def parse_info_lines(lines: Sequence[str]) -> List[PvLine]:
     return [best[i] for i in sorted(best)]
 
 
+_PERFT_MOVE = re.compile(r"^([a-i][0-9][a-i][0-9]): \d+$")
+
+
+def parse_perft_lines(lines: Sequence[str]) -> List[str]:
+    """UCI moves listed by ``go perft 1`` (``h2e2: 1`` lines; info strings ignored)."""
+    return [m.group(1) for m in map(_PERFT_MOVE.match, lines) if m]
+
+
+def wsl_path(path: str | Path) -> str:
+    """Absolute Windows path -> the same file under WSL's default ``/mnt`` automount."""
+    p = PureWindowsPath(path)
+    if not (p.is_absolute() and p.drive.endswith(":")):
+        raise ValueError(f"expected an absolute drive-letter path, got {path}")
+    return f"/mnt/{p.drive[0].lower()}{p.as_posix()[len(p.drive):]}"
+
+
+def engine_command(engine_path: str | Path, wsl_distro: Optional[str] = None) -> List[str]:
+    """argv that starts the engine: the binary itself, or a Linux build inside a WSL distro."""
+    if not wsl_distro:
+        return [str(engine_path)]
+    return ["wsl.exe", "-d", wsl_distro, "--exec", wsl_path(engine_path)]
+
+
 class PikafishEngine:
     """Thin synchronous UCI wrapper around a Pikafish process."""
 
@@ -127,12 +151,16 @@ class PikafishEngine:
         threads: int = 1,
         hash_mb: int = 64,
         multipv: int = 1,
+        wsl_distro: Optional[str] = None,
     ) -> None:
         # Resolve before Popen: with cwd= set, POSIX resolves a relative
         # executable path against the child's cwd, not the caller's.
         engine_path = Path(engine_path).resolve()
+        # With wsl_distro, engine_path is a Linux build run inside that WSL
+        # distro (for Windows hosts whose app-control policy blocks the .exe);
+        # file paths handed to the engine are translated to the distro's view.
         self._proc = subprocess.Popen(
-            [str(engine_path)],
+            engine_command(engine_path, wsl_distro),
             cwd=str(engine_path.parent),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -145,7 +173,8 @@ class PikafishEngine:
         self._send("uci")
         self._read_until("uciok")
         if nnue_path is not None:
-            self._send(f"setoption name EvalFile value {Path(nnue_path).resolve()}")
+            nnue_path = Path(nnue_path).resolve()
+            self._send(f"setoption name EvalFile value {wsl_path(nnue_path) if wsl_distro else nnue_path}")
         self._send(f"setoption name Threads value {threads}")
         self._send(f"setoption name Hash value {hash_mb}")
         self._send(f"setoption name MultiPV value {multipv}")
@@ -169,6 +198,12 @@ class PikafishEngine:
             if line.startswith(token):
                 return lines
 
+    def _set_position(self, fen: str, moves: Optional[Sequence[str]]) -> None:
+        cmd = f"position fen {fen}"
+        if moves:
+            cmd += " moves " + " ".join(moves)
+        self._send(cmd)
+
     def analyze_fen(
         self,
         fen: str,
@@ -181,10 +216,7 @@ class PikafishEngine:
         the engine sees the game history — required for it to reason about
         repetitions instead of treating every position as fresh.
         """
-        cmd = f"position fen {fen}"
-        if moves:
-            cmd += " moves " + " ".join(moves)
-        self._send(cmd)
+        self._set_position(fen, moves)
         self._send(f"go nodes {nodes}")
         lines = self._read_until("bestmove")
         pvs = parse_info_lines(lines)
@@ -193,6 +225,16 @@ class PikafishEngine:
         if best == "(none)":
             return None, pvs
         return best, pvs
+
+    def legal_moves(self, fen: str, moves: Optional[Sequence[str]] = None) -> List[str]:
+        """Pikafish's own legal moves (UCI) at a position, via ``go perft 1``.
+
+        Independent of our rules engine, so callers can cross-check it — e.g. an
+        empty list confirms a checkmate/stalemate verdict.
+        """
+        self._set_position(fen, moves)
+        self._send("go perft 1")
+        return parse_perft_lines(self._read_until("Nodes searched"))
 
     def close(self) -> None:
         try:

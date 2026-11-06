@@ -6,6 +6,15 @@ as Red, then as Black — so first-move and opening bias cancel per pair. Result
 are reported as W/D/L, score, an Elo estimate with a 95% CI, and (optionally) a
 GSPRT log-likelihood ratio for a regression gate.
 
+Every finished game is refereed by a second Pikafish process (see
+:func:`audit_game`): the final position's legal moves are cross-checked against
+Pikafish's own move generator (``go perft 1`` — after a checkmate/stalemate both
+lists must be empty; any mismatch is reported as a rules disagreement), and a
+move-capped game is adjudicated from the referee's evaluation instead of being
+scored as a draw. W/D/L, Elo and SPRT use the adjudicated results; the raw
+tally is kept alongside. With ``--games_out``, each game is logged as one JSON
+line (moves, raw and adjudicated result, referee audit) for later inspection.
+
 SPRT follows the fishtest-style trinomial GSPRT approximation: with empirical
 per-game mean ``m`` and variance ``v`` of the score,
 ``LLR ~= (s1 - s0) * (2m - s0 - s1) * N / (2v)`` where ``s0``/``s1`` are the
@@ -26,13 +35,24 @@ import argparse
 import json
 import math
 import time
+from collections import Counter
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
+from elephant_former.data_utils.pikafish_annotator import PikafishEngine, move_to_uci
 from elephant_former.data_utils.tokenization_utils import parse_iccs_move_to_coords
-from elephant_former.engine.elephant_chess_game import Move, Player
-from elephant_former.evaluation.baseline_bots import Bot, PikafishBot
-from elephant_former.evaluation.board_match import MCTSBot, ModelBot, ValueRerankBot, play_game
+from elephant_former.engine.elephant_chess_game import INITIAL_BOARD_FEN, Move, Player
+from elephant_former.evaluation.baseline_bots import Bot, PikafishBot, default_engine_path
+from elephant_former.evaluation.board_match import (
+    MCTSBot,
+    ModelBot,
+    PlayedGame,
+    ValueRerankBot,
+    play_recorded_game,
+)
+
+RESULT_STRINGS = {Player.RED: "1-0", Player.BLACK: "0-1", None: "1/2-1/2"}
+OUTCOME_WORDS = {"win": "model wins", "draw": "draw", "loss": "model loses"}
 
 
 def load_opening_book(path: str | Path) -> List[List[Move]]:
@@ -96,6 +116,71 @@ def elo_estimate(wins: int, draws: int, losses: int) -> Tuple[float, float, floa
     return to_elo(mean), to_elo(mean - 1.96 * se), to_elo(mean + 1.96 * se)
 
 
+def adjudicate_cap(cp: int, is_mate: bool, side_to_move: Player, threshold_cp: int) -> Optional[Player]:
+    """Winner of a move-capped game from the referee's eval, or ``None`` (stays a draw).
+
+    ``cp`` is from the side to move's view (UCI convention). A mate score or
+    ``|cp| >= threshold_cp`` awards the game to the side the engine favours.
+    """
+    if cp == 0 or (not is_mate and abs(cp) < threshold_cp):
+        return None
+    if cp > 0:
+        return side_to_move
+    return Player.BLACK if side_to_move == Player.RED else Player.RED
+
+
+def audit_game(
+    referee: PikafishEngine,
+    played: PlayedGame,
+    adjudicate_nodes: int = 1_000_000,
+    adjudicate_cp: int = 300,
+) -> Tuple[Optional[Player], dict]:
+    """Referee a finished game; returns ``(winner after adjudication, audit dict)``.
+
+    The final position's legal moves (our rules engine) are compared with
+    Pikafish's own (``go perft 1``); after a checkmate/stalemate both must be
+    empty, so any mismatch flags a rules disagreement. A final position that
+    still has moves is evaluated at ``adjudicate_nodes`` (0 skips it), and only
+    a ``move_cap`` game is re-scored from that eval (see :func:`adjudicate_cap`).
+    Games always start from the standard initial position, so the referee gets
+    the initial FEN plus the full move history (repetition-aware).
+    """
+    game = played.game
+    history = [move_to_uci(m) for m in game.move_history]
+    ours = {move_to_uci(m) for m in game.get_all_legal_moves_basic(game.current_player)}
+    theirs = set(referee.legal_moves(INITIAL_BOARD_FEN, history))
+    audit: dict = {"legal_ours": len(ours), "legal_pikafish": len(theirs), "legal_agree": ours == theirs}
+    if ours != theirs:
+        audit["only_ours"] = sorted(ours - theirs)
+        audit["only_pikafish"] = sorted(theirs - ours)
+
+    winner = played.winner
+    if theirs and adjudicate_nodes > 0:
+        _, pvs = referee.analyze_fen(INITIAL_BOARD_FEN, nodes=adjudicate_nodes, moves=history)
+        if pvs:
+            pv = pvs[0]
+            red_cp = pv.cp if game.current_player == Player.RED else -pv.cp
+            audit["eval"] = {"red_cp": red_cp, "is_mate": pv.is_mate, "depth": pv.depth, "nodes": adjudicate_nodes}
+            if played.status == "move_cap":
+                winner = adjudicate_cap(pv.cp, pv.is_mate, game.current_player, adjudicate_cp)
+    audit["adjudicated"] = winner != played.winner
+    return winner, audit
+
+
+def eval_label(ev: dict) -> str:
+    """Human-readable referee eval from :func:`audit_game`, e.g. ``+354cp for Red``."""
+    if ev["is_mate"]:
+        return "mate for " + ("Red" if ev["red_cp"] > 0 else "Black")
+    return f"{ev['red_cp']:+d}cp for Red"
+
+
+def _model_outcome(winner: Optional[Player], model_is_red: bool) -> str:
+    """``"win"`` / ``"draw"`` / ``"loss"`` from the model's side."""
+    if winner is None:
+        return "draw"
+    return "win" if (winner == Player.RED) == model_is_red else "loss"
+
+
 def run_rung(
     model_bot: Bot,
     nodes: int,
@@ -107,39 +192,90 @@ def run_rung(
     threads: int,
     sprt: Optional[Tuple[float, float]] = None,
     verbose: bool = False,
+    adjudicate_nodes: int = 1_000_000,
+    adjudicate_cp: int = 300,
+    games_out: Optional[str] = None,
+    meta: Optional[dict] = None,
+    wsl_distro: Optional[str] = None,
 ) -> dict:
-    """Play one ladder rung (paired games vs Pikafish@nodes); returns a record dict."""
-    wins = draws = losses = 0
+    """Play one ladder rung (paired games vs Pikafish@nodes); returns a record dict.
+
+    Results are refereed per :func:`audit_game`. With ``games_out``, one JSON
+    line per game is appended there; ``meta`` (e.g. model path and bot) is merged
+    into every game line and into the returned record. With ``wsl_distro``, the
+    opponent and the referee run as the Linux build inside that WSL distro.
+    """
+    meta = meta or {}
+    started = time.strftime("%Y-%m-%dT%H:%M:%S")
+    counts: Counter = Counter()
+    raw_counts: Counter = Counter()
+    adjudicated_games = rules_disagreements = 0
     lower, upper = sprt_bounds()
     llr = 0.0
     sprt_status = None
-    pika = PikafishBot(engine_path=engine_path, nnue_path=nnue_path, nodes=nodes, threads=threads)
+    if games_out:
+        Path(games_out).parent.mkdir(parents=True, exist_ok=True)
+    pika = PikafishBot(
+        engine_path=engine_path, nnue_path=nnue_path, nodes=nodes, threads=threads, wsl_distro=wsl_distro
+    )
+    # A separate process, so refereeing never touches the opponent's hash: the
+    # opponent plays exactly as it would in an unrefereed run.
+    referee = PikafishEngine(
+        engine_path or default_engine_path(wsl=bool(wsl_distro)),
+        nnue_path=nnue_path,
+        threads=threads,
+        wsl_distro=wsl_distro,
+    )
     games_played = 0
     try:
         for pair in range(num_games // 2):
-            opening = book[pair % len(book)]
+            opening_index = pair % len(book)
             for model_is_red in (True, False):
                 red, black = (model_bot, pika) if model_is_red else (pika, model_bot)
-                status, winner = play_game(red, black, max_moves=max_moves, opening=opening)
+                played = play_recorded_game(red, black, max_moves=max_moves, opening=book[opening_index])
                 games_played += 1
-                if winner is None:
-                    draws += 1
-                    outcome = "draw"
-                elif (winner == Player.RED) == model_is_red:
-                    wins += 1
-                    outcome = "model wins"
-                else:
-                    losses += 1
-                    outcome = "model loses"
+                winner, audit = audit_game(referee, played, adjudicate_nodes, adjudicate_cp)
+                outcome = _model_outcome(winner, model_is_red)
+                counts[outcome] += 1
+                raw_counts[_model_outcome(played.winner, model_is_red)] += 1
+                if audit["adjudicated"]:
+                    adjudicated_games += 1
                 if verbose:
                     colour = "Red" if model_is_red else "Black"
+                    note = f"; adjudicated, referee {eval_label(audit['eval'])}" if audit["adjudicated"] else ""
                     print(
-                        f"  [n={nodes}] game {games_played}: opening {pair % len(book)}, "
-                        f"model as {colour} -> {status} ({outcome})",
+                        f"  [n={nodes}] game {games_played}: opening {opening_index}, "
+                        f"model as {colour} -> {played.status} ({OUTCOME_WORDS[outcome]}{note})",
                         flush=True,
                     )
+                if not audit["legal_agree"]:
+                    rules_disagreements += 1
+                    print(
+                        f"  [referee] game {games_played}: final-position legal moves differ "
+                        f"(ours {audit['legal_ours']}, Pikafish {audit['legal_pikafish']}; "
+                        f"only ours {audit['only_ours'][:5]}, only Pikafish {audit['only_pikafish'][:5]})",
+                        flush=True,
+                    )
+                if games_out:
+                    line = {
+                        "rung_started": started,
+                        "nodes": nodes,
+                        "game": games_played,
+                        "opening": opening_index,
+                        "model_color": "red" if model_is_red else "black",
+                        "status": played.status,
+                        "raw_result": RESULT_STRINGS[played.winner],
+                        "result": RESULT_STRINGS[winner],
+                        "model_outcome": outcome,
+                        "plies": len(played.game.move_history),
+                        "moves": [move_to_uci(m) for m in played.game.move_history],
+                        "referee": audit,
+                        **meta,
+                    }
+                    with open(games_out, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(line) + "\n")
             if sprt is not None:
-                llr = sprt_llr(wins, draws, losses, elo0=sprt[0], elo1=sprt[1])
+                llr = sprt_llr(counts["win"], counts["draw"], counts["loss"], elo0=sprt[0], elo1=sprt[1])
                 if llr >= upper:
                     sprt_status = "H1"
                     break
@@ -148,10 +284,13 @@ def run_rung(
                     break
     finally:
         pika.close()
+        referee.close()
 
+    wins, draws, losses = counts["win"], counts["draw"], counts["loss"]
     elo, lo, hi = elo_estimate(wins, draws, losses)
     record = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "started": started,
         "nodes": nodes,
         "games": games_played,
         "wins": wins,
@@ -161,10 +300,17 @@ def run_rung(
         "elo": round(elo, 1),
         "elo_lo95": round(lo, 1),
         "elo_hi95": round(hi, 1),
+        "raw": {"wins": raw_counts["win"], "draws": raw_counts["draw"], "losses": raw_counts["loss"]},
+        "adjudicated_games": adjudicated_games,
+        "adjudication": {"nodes": adjudicate_nodes, "cp": adjudicate_cp},
+        "rules_disagreements": rules_disagreements,
         "engine_fallback_moves": pika.fallback_moves,
     }
+    if games_out:
+        record["games_out"] = games_out
     if sprt is not None:
         record["sprt"] = {"elo0": sprt[0], "elo1": sprt[1], "llr": round(llr, 3), "status": sprt_status or "inconclusive"}
+    record.update(meta)
     return record
 
 
@@ -192,6 +338,33 @@ def main() -> None:
     parser.add_argument("--pikafish_engine", type=str, default=None)
     parser.add_argument("--pikafish_nnue", type=str, default="tools/pikafish.nnue")
     parser.add_argument("--pikafish_threads", type=int, default=1)
+    parser.add_argument(
+        "--pikafish_wsl",
+        type=str,
+        default=None,
+        help="Run the Linux Pikafish build inside this WSL distro (e.g. Ubuntu), for Windows hosts whose "
+        "app-control policy blocks the .exe; --pikafish_engine/--pikafish_nnue stay Windows paths.",
+    )
+    parser.add_argument(
+        "--adjudicate_nodes",
+        type=int,
+        default=1_000_000,
+        help="Referee search budget for final positions that still have moves; move-capped games "
+        "are adjudicated from it (0 = no evaluation, move caps stay draws).",
+    )
+    parser.add_argument(
+        "--adjudicate_cp",
+        type=int,
+        default=300,
+        help="A move-capped game goes to the side the referee favours by at least this many "
+        "centipawns (or a mate score); otherwise it stays a draw.",
+    )
+    parser.add_argument(
+        "--games_out",
+        type=str,
+        default="logs/ladder_games.jsonl",
+        help="Append one JSON line per game (moves, raw/adjudicated result, referee audit); '' disables.",
+    )
     parser.add_argument("--out_jsonl", type=str, default="logs/ladder.jsonl", help="Append one JSON record per rung ('' disables).")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -218,6 +391,12 @@ def main() -> None:
     else:
         model_bot = ModelBot(args.model_path, device=args.device)
 
+    meta = {
+        "model_path": args.model_path,
+        "bot": f"mcts{args.mcts_sims}" if args.mcts_sims > 0 else ("rerank" if args.rerank else "policy"),
+    }
+    if args.pikafish_wsl:
+        meta["pikafish_wsl"] = args.pikafish_wsl
     sprt = (args.elo0, args.elo1) if args.sprt else None
     for nodes in args.nodes:
         num_games = args.num_games - (args.num_games % 2)
@@ -233,16 +412,25 @@ def main() -> None:
             threads=args.pikafish_threads,
             sprt=sprt,
             verbose=args.verbose,
+            adjudicate_nodes=args.adjudicate_nodes,
+            adjudicate_cp=args.adjudicate_cp,
+            games_out=args.games_out or None,
+            meta=meta,
+            wsl_distro=args.pikafish_wsl,
         )
-        record["model_path"] = args.model_path
-        record["bot"] = (
-            f"mcts{args.mcts_sims}" if args.mcts_sims > 0 else ("rerank" if args.rerank else "policy")
-        )
+        raw = record["raw"]
         print(
             f"nodes={record['nodes']}: {record['wins']}W-{record['losses']}L-{record['draws']}D "
             f"over {record['games']} games | score {record['score']:.1%} | "
             f"Elo {record['elo']:+.0f} [{record['elo_lo95']:+.0f}, {record['elo_hi95']:+.0f}]"
+            + (
+                f" | raw {raw['wins']}W-{raw['losses']}L-{raw['draws']}D, "
+                f"{record['adjudicated_games']} move-cap game(s) adjudicated"
+                if record["adjudicated_games"]
+                else ""
+            )
             + (f" | SPRT llr={record['sprt']['llr']} -> {record['sprt']['status']}" if sprt else "")
+            + (f" | RULES DISAGREEMENTS: {record['rules_disagreements']}" if record["rules_disagreements"] else "")
             + (f" | engine fallbacks: {record['engine_fallback_moves']}" if record["engine_fallback_moves"] else "")
         )
         if args.out_jsonl:

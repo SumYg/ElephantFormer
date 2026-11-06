@@ -115,9 +115,9 @@ class GreedyMaterialBot(Bot):
         return self._rng.choice(legal)
 
 
-def default_engine_path() -> str:
-    """The bundled Pikafish binary for this platform (Windows/Linux avx2)."""
-    sub = "Windows/pikafish-avx2.exe" if sys.platform == "win32" else "Linux/pikafish-avx2"
+def default_engine_path(wsl: bool = False) -> str:
+    """The bundled Pikafish binary for this platform (Windows/Linux avx2); the Linux one under WSL."""
+    sub = "Windows/pikafish-avx2.exe" if sys.platform == "win32" and not wsl else "Linux/pikafish-avx2"
     return str(Path("tools") / sub)
 
 
@@ -129,7 +129,8 @@ class PikafishBot(Bot):
     start from the standard initial position). If the engine's best move is not
     legal under our rules engine (rule-set edge cases), the bot falls back to
     the first legal move and counts the event in ``fallback_moves`` — a nonzero
-    count after a match deserves a look.
+    count after a match deserves a look. With ``wsl_distro``, the engine is the
+    Linux build run inside that WSL distro (see :class:`PikafishEngine`).
     """
 
     def __init__(
@@ -139,6 +140,7 @@ class PikafishBot(Bot):
         nodes: int = 1000,
         threads: int = 1,
         hash_mb: int = 64,
+        wsl_distro: Optional[str] = None,
     ) -> None:
         # Imported here so the torch-free annotation path stays torch-free and
         # bots that never use Pikafish don't need the engine binary present.
@@ -148,11 +150,12 @@ class PikafishBot(Bot):
         self.nodes = nodes
         self.fallback_moves = 0
         self._engine = PikafishEngine(
-            engine_path or default_engine_path(),
+            engine_path or default_engine_path(wsl=bool(wsl_distro)),
             nnue_path=nnue_path,
             threads=threads,
             hash_mb=hash_mb,
             multipv=1,
+            wsl_distro=wsl_distro,
         )
 
     def select_move(self, game: ElephantChessGame) -> Optional[Move]:

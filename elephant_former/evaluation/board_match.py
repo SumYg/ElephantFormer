@@ -234,13 +234,22 @@ class MatchResult:
         return 100.0 * self.wins_a / self.games if self.games else 0.0
 
 
-def play_game(
+@dataclass
+class PlayedGame:
+    """A finished game: how it ended, and the final engine state (with full move history)."""
+
+    status: str
+    winner: Optional[Player]
+    game: ElephantChessGame
+
+
+def play_recorded_game(
     red_bot: Bot,
     black_bot: Bot,
     max_moves: int = 200,
     opening: Optional[Sequence[Move]] = None,
-) -> Tuple[Optional[str], Optional[Player]]:
-    """Play a single game; return ``(status, winner)`` (winner ``None`` on draw).
+) -> PlayedGame:
+    """Play a single game and keep its record; :func:`play_game` without the record.
 
     ``opening`` moves are applied (and legality-checked) before the bots take
     over, enabling paired games from a book; opening plies count toward
@@ -257,15 +266,29 @@ def play_game(
         move = bot.select_move(game)
         if move is None:
             if game.is_king_in_check(mover):
-                return "checkmate", game.get_opponent(mover)
+                return PlayedGame("checkmate", game.get_opponent(mover), game)
             # 困毙: no legal moves loses even without check.
-            return "stalemate", game.get_opponent(mover)
+            return PlayedGame("stalemate", game.get_opponent(mover), game)
 
         game.apply_move(move)
         status, winner = game.check_game_over()
         if status:
-            return status, winner
-    return "move_cap", None
+            return PlayedGame(status, winner, game)
+    return PlayedGame("move_cap", None, game)
+
+
+def play_game(
+    red_bot: Bot,
+    black_bot: Bot,
+    max_moves: int = 200,
+    opening: Optional[Sequence[Move]] = None,
+) -> Tuple[Optional[str], Optional[Player]]:
+    """Play a single game; return ``(status, winner)`` (winner ``None`` on draw).
+
+    See :func:`play_recorded_game` for ``opening`` / ``max_moves`` semantics.
+    """
+    played = play_recorded_game(red_bot, black_bot, max_moves=max_moves, opening=opening)
+    return played.status, played.winner
 
 
 def play_match(
